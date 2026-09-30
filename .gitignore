@@ -1,0 +1,16 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+data/
+models/
+evaluation-reports/
+frontend/node_modules/
+frontend/.npm-cache/
+frontend/dist/
+*.tsbuildinfo
+.local/
+docs/
+knowledge-base-samples/

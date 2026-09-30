@@ -1,0 +1,85 @@
+name: operations-agent
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in .env}
+      COMMERCE_OWNER_PASSWORD: ${COMMERCE_OWNER_PASSWORD:?Set COMMERCE_OWNER_PASSWORD in .env}
+      COMMERCE_READER_PASSWORD: ${COMMERCE_READER_PASSWORD:?Set COMMERCE_READER_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./deploy/init-databases.sh:/docker-entrypoint-initdb.d/01-databases.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  seed:
+    build: ./backend
+    command: [python, -m, app.bootstrap]
+    environment:
+      COMMERCE_ADMIN_URL: postgresql+asyncpg://commerce_owner:${COMMERCE_OWNER_PASSWORD}@db:5432/commerce
+      SEED_DAYS: ${SEED_DAYS:-180}
+      SEED_SKUS: ${SEED_SKUS:-200}
+      SEED_ORDERS: ${SEED_ORDERS:-50000}
+      SEED_SCENARIO: ${SEED_SCENARIO:-mixed}
+    depends_on:
+      db: {condition: service_healthy}
+  api:
+    build: ./backend
+    environment:
+      APP_DATABASE_URL: postgresql+asyncpg://operations_app:${APP_DB_PASSWORD}@db:5432/operations
+      COMMERCE_DATABASE_URL: postgresql+asyncpg://commerce_reader:${COMMERCE_READER_PASSWORD}@db:5432/commerce
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_TIMEOUT: ${LLM_TIMEOUT:-45}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-adminadmin}
+      EMBEDDING_MODEL_PATH: /models/bge-small-zh-v1.5
+      RERANKER_MODEL_PATH: /models/bge-reranker-base
+      BACKGROUND_IN_API: "false"
+    volumes:
+      - ./models:/models:ro
+    ports: ["127.0.0.1:${API_PORT:-8000}:8000"]
+    depends_on:
+      seed: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+  frontend:
+    build: ./frontend
+    ports: ["127.0.0.1:${FRONTEND_PORT:-5173}:80"]
+    depends_on:
+      api: {condition: service_healthy}
+  worker:
+    build: ./backend
+    command: [python, -m, app.background]
+    environment:
+      APP_DATABASE_URL: postgresql+asyncpg://operations_app:${APP_DB_PASSWORD}@db:5432/operations
+      COMMERCE_DATABASE_URL: postgresql+asyncpg://commerce_reader:${COMMERCE_READER_PASSWORD}@db:5432/commerce
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      EMBEDDING_MODEL_PATH: /models/bge-small-zh-v1.5
+      RERANKER_MODEL_PATH: /models/bge-reranker-base
+    volumes:
+      - ./models:/models:ro
+    depends_on:
+      api: {condition: service_healthy}
+  model-download:
+    build: ./backend
+    profiles: [setup]
+    command: [python, -m, app.download_models, --directory, /models]
+    volumes:
+      - ./models:/models
+volumes:
+  postgres-data:

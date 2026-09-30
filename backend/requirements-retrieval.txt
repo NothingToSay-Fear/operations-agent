@@ -1,0 +1,5 @@
+-r requirements.txt
+sentence-transformers==3.4.1
+transformers==4.51.3
+huggingface-hub==0.30.2
+setuptools==80.9.0
