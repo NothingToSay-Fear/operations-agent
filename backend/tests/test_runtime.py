@@ -3,7 +3,7 @@ import copy
 import pytest
 from sqlalchemy import func, select, update
 
-from app.agent.contracts import Action, Criterion, Decision, Plan, Step, Assessment
+from app.agent.contracts import Action, Assessment, Criterion, Decision, Plan, Step, ToolCall
 from app.agent.runtime import AgentRuntime, LeaseLost, initial_state
 from app.agent.tools import calculate
 from app.models import Artifact, Evidence, Task, TaskEvent
@@ -324,6 +324,80 @@ async def test_real_tools_plan_revision_artifacts_and_finish(database, settings)
         assert await session.scalar(select(func.count()).select_from(Artifact)) == 1
         assert await session.scalar(select(func.count()).select_from(Evidence)) == 3
         assert task.state["usage"]["tool_calls"] == 3
+
+
+async def test_explicit_graph_batches_read_tools_and_skips_intermediate_evaluation(
+    database, settings, monkeypatch
+):
+    import asyncio
+
+    phases = []
+    started = 0
+    both_started = asyncio.Event()
+
+    async def fake_invoke(name, args, **kwargs):
+        nonlocal started
+        started += 1
+        if started == 2:
+            both_started.set()
+        await asyncio.wait_for(both_started.wait(), 1)
+        return {"tool": name, "value": 1}
+
+    monkeypatch.setattr("app.agent.runtime.invoke", fake_invoke)
+
+    class BatchModel:
+        async def decide(self, phase, context):
+            phases.append(phase)
+            if phase == "plan":
+                return Plan(
+                    summary="批量调查后形成结论",
+                    criteria=[Criterion(id="c1", description="取得两项证据")],
+                    steps=[
+                        Step(id="collect", objective="并行查询", done_when="取得两项证据"),
+                        Step(
+                            id="interpret",
+                            objective="解释证据",
+                            depends_on=["collect"],
+                            done_when="形成解释",
+                        ),
+                    ],
+                    change_reason="初始计划",
+                ), {}
+            refs = [row["evidence_id"] for row in context["observations"]]
+            if phase == "execute" and context["current_step"]["id"] == "collect" and not refs:
+                return Action(
+                    kind="tools",
+                    summary="并行取得范围和指标口径",
+                    tool_calls=[
+                        ToolCall(tool="inspect_data_capabilities", summary="查询数据范围"),
+                        ToolCall(tool="get_metric_definitions", summary="查询指标口径"),
+                    ],
+                ), {}
+            if phase == "execute":
+                return Action(kind="step_done", summary="当前步骤完成", evidence_ids=refs), {}
+            return Decision(
+                kind="finish",
+                reason="全部步骤完成",
+                answer="模拟数据分析完成。",
+                assessments=[
+                    Assessment(
+                        criterion_id="c1",
+                        satisfied=True,
+                        evidence_ids=refs,
+                        note="已取得并核对两项证据",
+                    )
+                ],
+            ), {}
+
+    tid = await new_task(database, settings)
+    await AgentRuntime(database, settings, BatchModel()).run(tid)
+    async with database.sessions() as session:
+        task = await session.get(Task, tid)
+        assert task.status == "completed"
+        assert task.state["usage"]["model_calls"] == 5
+        assert task.state["usage"]["tool_calls"] == 2
+        assert await session.scalar(select(func.count()).select_from(Evidence)) == 2
+    assert phases == ["plan", "execute", "execute", "execute", "evaluate"]
 
 
 async def test_only_one_worker_can_claim_task(database, settings):

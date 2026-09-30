@@ -38,12 +38,29 @@ class Plan(StrictModel):
         return self
 
 
+class ToolCall(StrictModel):
+    tool: str = Field(min_length=1, max_length=80)
+    arguments: dict = Field(default_factory=dict)
+    summary: str = Field(min_length=1, max_length=500)
+
+
 class Action(StrictModel):
-    kind: Literal["tool", "step_done", "replan", "ask_user"]
+    kind: Literal["tool", "tools", "step_done", "replan", "ask_user"]
     tool: str = Field(default="", max_length=80)
     arguments: dict = Field(default_factory=dict)
+    tool_calls: list[ToolCall] = Field(default_factory=list, max_length=6)
     summary: str = Field(min_length=1, max_length=2000)
     evidence_ids: list[str] = Field(default_factory=list, max_length=30)
+
+    @model_validator(mode="after")
+    def validate_tools(self):
+        if self.kind == "tool" and not self.tool:
+            raise ValueError("单工具动作必须提供tool")
+        if self.kind == "tools" and not self.tool_calls:
+            raise ValueError("批量工具动作必须提供tool_calls")
+        if self.kind != "tools" and self.tool_calls:
+            raise ValueError("只有批量工具动作可以提供tool_calls")
+        return self
 
 
 class Assessment(StrictModel):

@@ -101,6 +101,7 @@ def calculate(expression, values):
 class ToolSpec:
     description: str
     schema: type[StrictModel]
+    parallel_safe: bool = True
 
 
 REGISTRY = {
@@ -121,23 +122,36 @@ REGISTRY = {
         "读取当前任务证据，长表格按 offset 分页，next_offset 指向下一页。", ReadEvidence
     ),
     "calculate": ToolSpec("使用Decimal进行有依据的四则计算。", Calculation),
-    "save_artifact": ToolSpec("保存内部Markdown报告/文案或CSV表格；不修改经营数据。", SaveArtifact),
+    "save_artifact": ToolSpec(
+        "保存内部Markdown报告/文案或CSV表格；不修改经营数据。", SaveArtifact, parallel_safe=False
+    ),
     "search_metric_definitions": ToolSpec("检索指标名称、别名和口径；实际数值须查询经营工具。", Search),
     "search_task_history": ToolSpec(
         "只检索当前任务较早的讨论，不能查其他任务；历史不是最新业务事实。", Search
     ),
     "read_task_history": ToolSpec("读取当前任务的历史片段；不能传入其他任务的片段。", HistoryRead),
     "propose_memory": ToolSpec(
-        "从用户原话提出长期记忆候选，必须等待用户在界面确认后才生效。", MemoryProposal
+        "从用户原话提出长期记忆候选，必须等待用户在界面确认后才生效。",
+        MemoryProposal,
+        parallel_safe=False,
     ),
 }
 
 
 def catalog():
     return [
-        {"name": name, "description": spec.description, "parameters": spec.schema.model_json_schema()}
+        {
+            "name": name,
+            "description": spec.description,
+            "parameters": spec.schema.model_json_schema(),
+            "parallel_safe": spec.parallel_safe,
+        }
         for name, spec in REGISTRY.items()
     ]
+
+
+def supports_parallel(name):
+    return bool(REGISTRY.get(name) and REGISTRY[name].parallel_safe)
 
 
 async def invoke(name, args, *, commerce, session, task, settings, artifact_id):

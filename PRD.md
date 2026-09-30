@@ -163,10 +163,10 @@ flowchart TD
     C --> P[Planner 生成或更新计划]
     P --> G[结构 权限 预算校验]
     G --> E[Executor 执行当前子目标]
-    E --> T[选择并调用工具]
+    E --> T[选择单个工具或独立只读工具批次]
     T --> O[持久化工具观察和证据]
     O --> E
-    E --> V[Evaluator 检查子目标与总目标]
+    E -->|计划步骤全部完成或关键异常| V[Evaluator 检查总目标]
     V -->|继续下一步| E
     V -->|调整计划| P
     V -->|缺少关键条件| H[等待用户补充]
@@ -196,11 +196,11 @@ flowchart TD
 - 可以连续检索、读取原文、查询不同维度或调用计算工具。
 - 输出包含实际成果、证据 ID、发现、缺口与失败情况。
 - 当前步骤需要改变任务范围、依赖或策略时，交回 Replanner。
-- P0 默认顺序执行；只有无依赖的只读调用可并发。
+- 一次结构化动作最多选择 6 个无依赖的只读调用并发执行；成果保存和记忆候选等写入工具必须单独执行。
 
 ### 5.4 Evaluator / Replanner
 
-每个子目标结束及关键错误后检查目标覆盖度，输出有限的控制决策：`continue`、`replan`、`ask_user`、`finish`、`stop`。
+计划步骤全部完成、发生关键错误、需要重规划或预算收尾时检查目标覆盖度，输出有限的控制决策：`continue`、`replan`、`ask_user`、`finish`、`stop`。中间步骤完成后直接进入下一个满足依赖的步骤，不重复执行全局评估。
 
 - 控制决策类型固定，业务计划内容由模型生成。
 - 重规划支持新增、替换、取消和重排未执行步骤，保留已执行记录。
@@ -449,7 +449,7 @@ PRD.md                    本文档
 - Agent 沿用 LangChain 模型与工具接口、LangGraph 状态运行时，重写模型驱动的规划和执行逻辑。
 - 检索沿用 pgvector、Sentence Transformers/BGE、全文/BM25、RRF 和 Cross-Encoder；默认完整部署向量与精排模型并真实验收。模型异常时可显式降级，但不能将降级运行视为完整检索验收通过。
 - 前端沿用 React、TypeScript、Vite、Ant Design、SSE 与 Markdown/表格渲染；交付沿用 Docker Compose、pytest。
-- LangGraph 仅承载通用循环、暂停恢复与状态管理，图中不增加“GMV 分析”“618 复盘”一类业务专属路径。
+- LangGraph 使用 `guard`、`plan`、`execute`、`tools`、`evaluate` 显式节点承载通用循环，图中不增加“GMV 分析”“618 复盘”一类业务专属路径。
 - Planner、Executor 与 Evaluator 可使用同一模型的不同上下文和输出契约，无需多 Agent 系统才能实现。
 - 模型要求可靠的工具调用与结构化输出；具体供应商和型号尚待用户决定及基准评测。
 - 旧 `AGENTS.md` 提到 DeepAgent，但本次所读 `requirements.txt` 未包含 `deepagents` 依赖；因此以实际 LangChain/LangGraph 技术栈为实现基线。若采用 Deep Agents，先核验需求，不把其 todo 列表等同于完整计划执行协议。

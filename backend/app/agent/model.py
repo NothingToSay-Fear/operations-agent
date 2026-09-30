@@ -7,7 +7,7 @@ from openai import LengthFinishReasonError
 
 from app.agent.contracts import Action, Decision, Plan
 
-PROMPT_VERSION = "2026-09-30.4"
+PROMPT_VERSION = "2026-10-01.1"
 COMMON = """你是面向商家运营的自主 Plan-and-Execute Agent，使用中文。
 你需要完成用户目标，实际调查和执行，不按固定任务类型套流程。业务数据全部为模拟数据，必须注明。
 数据只读；可以保存报告、表格和文案。不要虚构可调用工具，不要执行改价、发布、采购或发送消息。
@@ -31,8 +31,10 @@ PROMPTS = {
 每个步骤会消耗执行决策和评估调用，请按子目标合并相关调查，避免把每次工具调用拆成一个步骤。
 通常用1至4个子目标覆盖问题；确认口径属于调查准备，撰写结论属于交付，不必分别新增步骤。
 计划本身不会完成任务，后续执行器将真正调用工具。""",
-    "execute": """执行当前子目标。每次决定一个动作：tool 调用工具；step_done 表示子目标已满足；
+    "execute": """执行当前子目标。每次决定一个动作：tool 调用一个工具；tools 批量调用多个相互独立的只读工具；step_done 表示子目标已满足；
 replan 表示需要调整剩余计划；ask_user 表示缺少无法自行获取的关键条件。
+优先把同一子目标中互不依赖的查询合并为一次 tools 动作，最多6个；有先后依赖的查询必须分开。
+save_artifact 与 propose_memory 会写入数据，只能使用单个 tool 动作，不能放入 tools。
 工具参数严格遵守目录 Schema。观察可能被截断，需要完整数据时调用 read_evidence。
 save_artifact 可保存真实报告/文案/CSV；报告应包含证据、口径和缺口，不只说已完成。
 引用格式 [证据](evidence:ev_...)，成果可用 [成果](artifact:ar_...)。
@@ -87,6 +89,7 @@ FORMAT_EXAMPLES = {
         "kind": "tool",
         "tool": "inspect_data_capabilities",
         "arguments": {},
+        "tool_calls": [],
         "summary": "确认可用范围",
         "evidence_ids": [],
     },

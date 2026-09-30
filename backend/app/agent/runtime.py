@@ -14,7 +14,7 @@ from sqlalchemy import select, update
 
 from app.agent.contracts import Action, Decision, Plan
 from app.agent.model import ModelGateway, ModelUnavailable, PROMPT_VERSION, model_failure
-from app.agent.tools import catalog, invoke
+from app.agent.tools import catalog, invoke, supports_parallel
 from app import access, auxiliary, memory, task_context
 from app.extension_models import MemoryEvent
 from app.models import Evidence, Run, Task, TaskEvent, uid
@@ -91,7 +91,7 @@ class ContextChanged(LeaseLost):
 
 class GraphState(TypedDict):
     task_id: str
-    more: bool
+    route: str
 
 
 class AgentRuntime:
@@ -101,9 +101,19 @@ class AgentRuntime:
         self.model = model or ModelGateway(settings)
         self.owner = uid()
         builder = StateGraph(GraphState)
-        builder.add_node("advance", self._node)
-        builder.add_edge(START, "advance")
-        builder.add_conditional_edges("advance", lambda state: "advance" if state["more"] else END)
+        builder.add_node("guard", self._guard_node)
+        builder.add_node("plan", self._plan_node)
+        builder.add_node("execute", self._execute_node)
+        builder.add_node("tools", self._tools_node)
+        builder.add_node("evaluate", self._evaluate_node)
+        builder.add_edge(START, "guard")
+        builder.add_conditional_edges(
+            "guard",
+            lambda state: state["route"],
+            {"plan": "plan", "execute": "execute", "tool": "tools", "evaluate": "evaluate", "end": END},
+        )
+        for node in ("plan", "execute", "tools", "evaluate"):
+            builder.add_edge(node, "guard")
         # 数据库状态是唯一持久化检查点，不另建一份可能冲突的运行状态。
         self.graph = builder.compile()
 
@@ -143,7 +153,7 @@ class AgentRuntime:
                         "provider": self.settings.llm_provider,
                         "model": self.settings.llm_model,
                         "prompt_version": PROMPT_VERSION,
-                        "tools_version": "1.0",
+                        "tools_version": "2.0",
                         "runtime": "langgraph",
                     },
                 )
@@ -167,7 +177,7 @@ class AgentRuntime:
             return
         heartbeat = asyncio.create_task(self.heartbeat(task_id))
         try:
-            await self.graph.ainvoke({"task_id": task_id, "more": True}, {"recursion_limit": 150})
+            await self.graph.ainvoke({"task_id": task_id, "route": "plan"}, {"recursion_limit": 150})
         except LeaseLost:
             pass
         except asyncio.CancelledError:
@@ -210,7 +220,9 @@ class AgentRuntime:
                 raise LeaseLost()
             return task
 
-    async def commit(self, task, state, kind, payload, *, status="running", evidence=None, session=None):
+    async def commit(
+        self, task, state, kind, payload, *, status="running", evidence=None, evidences=None, session=None
+    ):
         owned_session = session is None
         session = session or self.db.sessions()
         try:
@@ -311,10 +323,11 @@ class AgentRuntime:
                             },
                         )
                     )
-            if evidence:
-                if not await access.references_allowed(session, task.user_id, evidence.result):
+            evidence_rows = ([evidence] if evidence else []) + list(evidences or [])
+            for evidence_row in evidence_rows:
+                if not await access.references_allowed(session, task.user_id, evidence_row.result):
                     raise ContextChanged()
-                session.add(evidence)
+                session.add(evidence_row)
             await memory.append_history(session, task, state["seq"], kind, history_payload, self.settings)
             await session.commit()
         except Exception:
@@ -324,8 +337,13 @@ class AgentRuntime:
             if owned_session:
                 await session.close()
 
-    async def _node(self, graph_state):
-        task = await self.load(graph_state["task_id"])
+    async def _guard_node(self, graph_state):
+        async with self.db.sessions() as session:
+            task = await session.get(Task, graph_state["task_id"])
+        if task is None or task.status != "running":
+            return {"task_id": graph_state["task_id"], "route": "end"}
+        if task.lease_owner != self.owner or task.lease_until < time.time():
+            raise LeaseLost()
         async with self.db.sessions() as session:
             revision = await access.scope_revision(session, task.user_id)
             valid = await access.memories_valid(session, task.user_id, task.state.get("used_memories", []))
@@ -352,9 +370,27 @@ class AgentRuntime:
             state["observations"] = []
             task._skip_scope_checks = True
             await self.commit(task, state, "context_changed", {"message": state["feedback"]})
-            return {"task_id": task.id, "more": True}
-        more = await self.advance(task)
-        return {"task_id": task.id, "more": more}
+            return {"task_id": task.id, "route": "plan"}
+        if not await self.prepare(task):
+            return {"task_id": task.id, "route": "end"}
+        current = await self.load(task.id)
+        return {"task_id": task.id, "route": current.state["phase"]}
+
+    async def _plan_node(self, graph_state):
+        await self.decide(await self.load(graph_state["task_id"]), "plan")
+        return graph_state
+
+    async def _execute_node(self, graph_state):
+        await self.decide(await self.load(graph_state["task_id"]), "execute")
+        return graph_state
+
+    async def _tools_node(self, graph_state):
+        await self.execute_tool(await self.load(graph_state["task_id"]))
+        return graph_state
+
+    async def _evaluate_node(self, graph_state):
+        await self.decide(await self.load(graph_state["task_id"]), "evaluate")
+        return graph_state
 
     def current_step(self, state):
         if not state.get("plan"):
@@ -401,6 +437,10 @@ class AgentRuntime:
             return None
         usage[kind] += 1
         turn_usage[kind] += 1
+        pending = state.get("pending") or {}
+        tool_name = pending.get("tool")
+        if pending.get("kind") == "batch":
+            tool_name = [call["tool"] for call in pending.get("calls", [])]
         await self.commit(
             task,
             state,
@@ -409,7 +449,7 @@ class AgentRuntime:
                 "phase": state["phase"],
                 "call": turn_usage[kind],
                 "turn": state["turn_number"],
-                "tool": (state.get("pending") or {}).get("tool"),
+                "tool": tool_name,
             },
         )
         return await self.load(task.id)
@@ -427,7 +467,7 @@ class AgentRuntime:
             else None
         )
 
-    async def advance(self, task):
+    async def prepare(self, task):
         state = task.state
         remaining = state["budget"]["model_calls"] - state["turn_usage"]["model_calls"]
         tools_exhausted = state["turn_usage"]["tool_calls"] >= state["budget"]["tool_calls"]
@@ -441,13 +481,26 @@ class AgentRuntime:
             )
             await self.commit(task, state, "finalizing", {"message": "正在根据已有证据完成最终交付"})
             return True
-        if state["phase"] == "tool":
-            return await self.execute_tool(task)
         if state["phase"] == "execute" and not self.current_step(state):
             state = copy.deepcopy(state)
             state["phase"] = "evaluate"
             await self.commit(task, state, "evaluating", {"message": "正在检查任务完成条件"})
             return True
+        return True
+
+    async def advance(self, task):
+        """兼容单步执行测试；正式运行由显式LangGraph节点路由。"""
+        if not await self.prepare(task):
+            return False
+        task = await self.load(task.id)
+        phase = task.state["phase"]
+        if phase == "tool":
+            return await self.execute_tool(task)
+        return await self.decide(task, phase)
+
+    async def decide(self, task, phase):
+        if task.state["phase"] != phase:
+            raise LeaseLost()
         task = await self.reserve(task, "model_calls")
         if not task:
             return False
@@ -576,14 +629,34 @@ class AgentRuntime:
         if step is None:
             raise ValueError("没有可执行步骤，应评估总目标")
         self.check_evidence(state, action.evidence_ids)
-        if action.kind == "tool":
-            if state["step_tools"].get(step["id"], 0) >= self.settings.max_step_tools:
+        if action.kind in {"tool", "tools"}:
+            calls = (
+                [{"tool": action.tool, "arguments": action.arguments, "summary": action.summary}]
+                if action.kind == "tool"
+                else [call.model_dump() for call in action.tool_calls]
+            )
+            if action.kind == "tools" and any(not supports_parallel(call["tool"]) for call in calls):
+                raise ValueError("批量动作只允许相互独立的只读工具；写入工具必须单独执行")
+            used = state["step_tools"].get(step["id"], 0)
+            remaining_tools = state["budget"]["tool_calls"] - state["turn_usage"]["tool_calls"]
+            if used + len(calls) > self.settings.max_step_tools or len(calls) > remaining_tools:
                 state["phase"] = "plan"
                 state["feedback"] = (
-                    "当前步骤已达到工具预算，请基于已有证据重新规划剩余子目标，避免重复已完成的查询。"
+                    "当前批次超过步骤或本轮工具预算，请缩小查询批次，并基于已有证据重新规划。"
                 )
             else:
-                state["pending"] = {**action.model_dump(), "id": uid(), "step_id": step["id"]}
+                if action.kind == "tool":
+                    state["pending"] = {**action.model_dump(), "id": uid(), "step_id": step["id"]}
+                else:
+                    state["pending"] = {
+                        "kind": "batch",
+                        "summary": action.summary,
+                        "step_id": step["id"],
+                        "calls": [
+                            {**call, "id": uid(), "step_id": step["id"]}
+                            for call in calls
+                        ],
+                    }
                 state["phase"] = "tool"
         elif action.kind == "step_done":
             state["steps"][step["id"]] = {
@@ -592,7 +665,8 @@ class AgentRuntime:
                 "evidence_ids": action.evidence_ids,
             }
             state["plans"][-1]["execution_snapshot"] = copy.deepcopy(state["steps"])
-            state["phase"] = "evaluate"
+            # 中间步骤完成后直接进入下一个可执行步骤，只在计划结束时做全局评估。
+            state["phase"] = "execute" if self.current_step(state) else "evaluate"
         elif action.kind == "replan":
             state["phase"] = "plan"
             state["feedback"] = action.summary
@@ -669,7 +743,8 @@ class AgentRuntime:
     async def execute_tool(self, task):
         pending = task.state["pending"]
         if (
-            pending["tool"] == "search_knowledge"
+            pending.get("kind") != "batch"
+            and pending["tool"] == "search_knowledge"
             and "_queries" not in pending
             and self.settings.llm_enabled
             and self.settings.query_expansion_limit
@@ -696,36 +771,69 @@ class AgentRuntime:
                 self.account(state)
             await self.commit(task, state, "query_expansion", {"queries": state["pending"]["_queries"]})
             return True
-        task = await self.reserve(task, "tool_calls")
-        if not task:
-            return False
+        calls = pending["calls"] if pending.get("kind") == "batch" else [pending]
+        for _ in calls:
+            task = await self.reserve(task, "tool_calls")
+            if not task:
+                return False
         state = copy.deepcopy(task.state)
         pending = state["pending"]
-        eid, aid = "ev_" + pending["id"], "ar_" + pending["id"]
-        fingerprint = hashlib.sha256(
-            json.dumps(
-                [pending["tool"], pending["arguments"], state["constraint_version"]], sort_keys=True
-            ).encode()
-        ).hexdigest()
+        calls = pending["calls"] if pending.get("kind") == "batch" else [pending]
+        fingerprints = [self.tool_fingerprint(call, state["constraint_version"]) for call in calls]
+        seen = {}
+        rejected = []
+        for fingerprint in fingerprints:
+            seen[fingerprint] = seen.get(fingerprint, 0) + 1
+            rejected.append(state["fingerprints"].get(fingerprint, 0) + seen[fingerprint] > 2)
+
+        remaining = max(1, state["budget"]["active_seconds"] - state["turn_usage"]["active_seconds"])
+        if len(calls) > 1:
+            outcomes = await asyncio.gather(
+                *(
+                    self.invoke_read_tool(task, call, remaining, reject_duplicate=duplicate)
+                    for call, duplicate in zip(calls, rejected)
+                )
+            )
+            self.account(state)
+            observations, evidences = [], []
+            for call, fingerprint, outcome in zip(calls, fingerprints, outcomes):
+                observation, evidence = self.record_tool_outcome(
+                    state, task, call, fingerprint, *outcome
+                )
+                observations.append(observation)
+                evidences.append(evidence)
+            state["pending"] = None
+            state["phase"] = "execute"
+            state["feedback"] = (
+                ""
+                if all(row["status"] == "success" for row in observations)
+                else "批量工具存在失败或空结果，请根据观察修正行动。"
+            )
+            await self.commit(
+                task,
+                state,
+                "tool_result",
+                {"batch": observations, "count": len(observations)},
+                evidences=evidences,
+            )
+            return True
+
+        call, fingerprint = calls[0], fingerprints[0]
         status, error = "success", None
         async with self.db.sessions() as session:
             try:
-                if state["fingerprints"].get(fingerprint, 0) >= 2:
+                if rejected[0]:
                     raise ValueError("相同参数已重复两次且未增加信息；请换方法或停止")
                 async with self.db.read_sessions() as commerce:
-                    remaining = max(
-                        1,
-                        state["budget"]["active_seconds"] - state["turn_usage"]["active_seconds"],
-                    )
                     result = await asyncio.wait_for(
                         invoke(
-                            pending["tool"],
-                            pending["arguments"],
+                            call["tool"],
+                            call["arguments"],
                             commerce=commerce,
                             session=session,
                             task=task,
                             settings=self.settings,
-                            artifact_id=aid,
+                            artifact_id="ar_" + call["id"],
                         ),
                         timeout=min(30, remaining),
                     )
@@ -740,40 +848,89 @@ class AgentRuntime:
                 result = {"message": "工具执行失败或超时，可检查数据源后有限重试。", "retryable": True}
                 status, error = "failed", "tool_unavailable"
             self.account(state)
-            state["fingerprints"][fingerprint] = state["fingerprints"].get(fingerprint, 0) + 1
-            sid = pending["step_id"]
-            state["step_tools"][sid] = state["step_tools"].get(sid, 0) + 1
-            observation = {
-                "evidence_id": eid,
-                "step_id": sid,
-                "plan_version": len(state["plans"]),
-                "tool": pending["tool"],
-                "arguments": pending["arguments"],
-                "status": status,
-                "data": compact(result),
-                "error_code": error,
-                "constraint_version": state["constraint_version"],
-            }
-            state["observations"].append(observation)
-            if status == "success" and "artifact_id" in result:
-                state["artifacts"].append({**result, "constraint_version": state["constraint_version"]})
+            observation, evidence = self.record_tool_outcome(
+                state, task, call, fingerprint, status, error, result
+            )
             state["pending"] = None
             state["phase"] = "execute"
             state["feedback"] = "" if status == "success" else f"工具返回 {status}，请根据观察修正行动。"
-            evidence = Evidence(
-                id=eid,
-                task_id=task.id,
-                tool=pending["tool"],
-                arguments=pending["arguments"],
-                result={
-                    "status": status,
-                    "data": result,
-                    "error_code": error,
-                    "constraint_version": state["constraint_version"],
-                },
-            )
             await self.commit(task, state, "tool_result", observation, evidence=evidence, session=session)
         return True
+
+    @staticmethod
+    def tool_fingerprint(call, constraint_version):
+        return hashlib.sha256(
+            json.dumps([call["tool"], call["arguments"], constraint_version], sort_keys=True).encode()
+        ).hexdigest()
+
+    async def invoke_read_tool(self, task, call, remaining, *, reject_duplicate=False):
+        """批量动作仅执行只读工具，每个调用使用独立会话以支持安全并行。"""
+        if reject_duplicate:
+            return (
+                "failed",
+                "invalid_tool_request",
+                {"message": "相同参数已重复两次且未增加信息；请换方法或停止", "retryable": False},
+            )
+        status, error = "success", None
+        async with self.db.sessions() as session:
+            try:
+                async with self.db.read_sessions() as commerce:
+                    result = await asyncio.wait_for(
+                        invoke(
+                            call["tool"],
+                            call["arguments"],
+                            commerce=commerce,
+                            session=session,
+                            task=task,
+                            settings=self.settings,
+                            artifact_id="ar_" + call["id"],
+                        ),
+                        timeout=min(30, remaining),
+                    )
+                if "rows" in result and not result["rows"]:
+                    status = "empty"
+            except (ValueError, SyntaxError, ArithmeticError) as exc:
+                await session.rollback()
+                result = {"message": str(exc)[:1200], "retryable": False}
+                status, error = "failed", "invalid_tool_request"
+            except Exception:
+                await session.rollback()
+                result = {"message": "工具执行失败或超时，可检查数据源后有限重试。", "retryable": True}
+                status, error = "failed", "tool_unavailable"
+        return status, error, result
+
+    def record_tool_outcome(self, state, task, call, fingerprint, status, error, result):
+        eid = "ev_" + call["id"]
+        state["fingerprints"][fingerprint] = state["fingerprints"].get(fingerprint, 0) + 1
+        sid = call["step_id"]
+        state["step_tools"][sid] = state["step_tools"].get(sid, 0) + 1
+        observation = {
+            "evidence_id": eid,
+            "step_id": sid,
+            "plan_version": len(state["plans"]),
+            "tool": call["tool"],
+            "arguments": call["arguments"],
+            "status": status,
+            "data": compact(result),
+            "error_code": error,
+            "constraint_version": state["constraint_version"],
+        }
+        state["observations"].append(observation)
+        if status == "success" and "artifact_id" in result:
+            state["artifacts"].append({**result, "constraint_version": state["constraint_version"]})
+        evidence = Evidence(
+            id=eid,
+            task_id=task.id,
+            tool=call["tool"],
+            arguments=call["arguments"],
+            result={
+                "status": status,
+                "data": result,
+                "error_code": error,
+                "constraint_version": state["constraint_version"],
+            },
+        )
+        return observation, evidence
 
 
 async def worker(database, settings, stop: asyncio.Event, model=None):

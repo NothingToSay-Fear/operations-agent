@@ -117,7 +117,10 @@ export default function App() {
     source.addEventListener('update', event => {
       const data = JSON.parse((event as MessageEvent).data);
       const p = data.payload;
-      setEventText(p.summary || p.reason || p.message || TOOL[p.tool] || (data.kind === 'model_started' ? '正在分析当前目标与证据…' : '正在推进任务…'));
+      const toolText = Array.isArray(p.tool)
+        ? `正在并行执行：${p.tool.map((name: string) => TOOL[name] || name).join('、')}`
+        : TOOL[p.tool];
+      setEventText(p.summary || p.reason || p.message || toolText || (data.kind === 'model_started' ? '正在分析当前目标与证据…' : '正在推进任务…'));
       refresh();
     });
     source.addEventListener('done', () => { source.close(); refresh(); });

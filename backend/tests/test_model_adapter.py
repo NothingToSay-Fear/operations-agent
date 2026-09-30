@@ -21,6 +21,7 @@ VALUES = {
         "kind": "tool",
         "tool": "query_metrics",
         "arguments": {"group_by": "channel"},
+        "tool_calls": [],
         "summary": "查询渠道",
         "evidence_ids": [],
     },
