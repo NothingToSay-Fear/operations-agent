@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from app import access, analytics, knowledge, memory, retrieval
 from app.analytics import InventoryQuery, ProductQuery, Query, StrictModel, PeriodComparison
+from app.extension_models import TaskMessage
 from app.models import Artifact, Evidence
 
 
@@ -211,7 +212,14 @@ async def invoke(name, args, *, commerce, session, task, settings, artifact_id):
             unit_id=getattr(query, "unit_id", None),
         )
     if name == "propose_memory":
-        if not any(query.source_quote in m["content"] for m in task.state["messages"] if m["role"] == "user"):
+        source = await session.scalar(
+            select(TaskMessage.id).where(
+                TaskMessage.task_id == task.id,
+                TaskMessage.role == "user",
+                TaskMessage.content.contains(query.source_quote),
+            )
+        )
+        if not source:
             raise ValueError("候选必须引用当前任务中用户明确说过的原话")
         candidate = await memory.propose(
             session,

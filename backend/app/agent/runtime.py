@@ -15,7 +15,7 @@ from sqlalchemy import select, update
 from app.agent.contracts import Action, Decision, Plan
 from app.agent.model import ModelGateway, ModelUnavailable, PROMPT_VERSION, model_failure
 from app.agent.tools import catalog, invoke
-from app import access, auxiliary, memory
+from app import access, auxiliary, memory, task_context
 from app.extension_models import MemoryEvent
 from app.models import Evidence, Run, Task, TaskEvent, uid
 
@@ -44,6 +44,13 @@ def initial_state(goal, settings):
             "output_tokens": 0,
             "active_seconds": 0,
         },
+        turn_usage={
+            "model_calls": 0,
+            "tool_calls": 0,
+            "replans": 0,
+            "active_seconds": 0,
+        },
+        turn_number=1,
         budget={
             "model_calls": settings.max_model_calls,
             "tool_calls": settings.max_tool_calls,
@@ -229,7 +236,10 @@ class AgentRuntime:
             # 后台只追加维护用量；业务版本仍由用户控制和前台决策递增。
             for key in ("model_calls", "input_tokens", "output_tokens"):
                 state["usage"][key] += max(0, current.state["usage"].get(key, 0) - baseline.get(key, 0))
-            if kind == "model_started" and state["usage"]["model_calls"] > state["budget"]["model_calls"]:
+            if (
+                kind == "model_started"
+                and state["turn_usage"]["model_calls"] > state["budget"]["model_calls"]
+            ):
                 # 维护任务先占用了最后一次额度，重新加载状态后按原预算停止。
                 raise LeaseLost()
             a, b = self.settings.input_price_per_million, self.settings.output_price_per_million
@@ -260,6 +270,32 @@ class AgentRuntime:
                     payload={**payload, "scope_revision": revision},
                 )
             )
+            assistant_content = ""
+            assistant_kind = "answer"
+            if kind == "evaluation" and payload.get("kind") in {"finish", "stop", "ask_user"}:
+                assistant_content = str(payload.get("answer") or payload.get("reason") or "").strip()
+                assistant_kind = "question" if payload.get("kind") == "ask_user" else "answer"
+            elif kind == "action" and payload.get("kind") == "ask_user":
+                assistant_content = str(payload.get("summary") or "").strip()
+                assistant_kind = "question"
+            elif kind in {"error", "blocked", "budget_exhausted", "model_error"}:
+                assistant_content = str(payload.get("message") or "").strip()
+                assistant_kind = "notice"
+            elif kind == "decision_invalid" and status == "failed":
+                assistant_content = str(state.get("answer") or payload.get("message") or "").strip()
+                assistant_kind = "notice"
+            history_payload = dict(payload)
+            if assistant_content:
+                task_message = await task_context.record_assistant_message(
+                    session,
+                    task,
+                    state["seq"],
+                    assistant_content,
+                    self.settings,
+                    kind=assistant_kind,
+                    scope_revision=revision,
+                )
+                history_payload["message_ids"] = [task_message.id]
             if kind in {"plan_updated", "action", "evaluation"}:
                 for stamp in state.get("used_memories", []):
                     session.add(
@@ -279,7 +315,7 @@ class AgentRuntime:
                 if not await access.references_allowed(session, task.user_id, evidence.result):
                     raise ContextChanged()
                 session.add(evidence)
-            await memory.append_history(session, task, state["seq"], kind, payload, self.settings)
+            await memory.append_history(session, task, state["seq"], kind, history_payload, self.settings)
             await session.commit()
         except Exception:
             await session.rollback()
@@ -334,13 +370,13 @@ class AgentRuntime:
         s = task.state
         return {
             "goal": task.goal,
-            "messages": s["messages"],
+            "messages": [],
             "plan": s["plan"],
             "step_results": s["steps"],
             "current_step": self.current_step(s),
             "observations": s["observations"][-20:],
             "artifacts": s["artifacts"],
-            "remaining_budget": {k: s["budget"][k] - s["usage"].get(k, 0) for k in s["budget"]},
+            "remaining_budget": {key: s["budget"][key] - s["turn_usage"].get(key, 0) for key in s["budget"]},
             "feedback": s.get("feedback", ""),
             "tools": catalog(),
             "constraint_version": s["constraint_version"],
@@ -350,27 +386,38 @@ class AgentRuntime:
         state = copy.deepcopy(task.state)
         now = time.time()
         if state.get("active_started_at"):
-            state["usage"]["active_seconds"] += min(
-                now - state["active_started_at"], self.settings.lease_seconds
-            )
+            elapsed = min(now - state["active_started_at"], self.settings.lease_seconds)
+            state["usage"]["active_seconds"] += elapsed
+            state["turn_usage"]["active_seconds"] += elapsed
         state["active_started_at"] = now
-        usage, budget = state["usage"], state["budget"]
-        if usage.get(kind, 0) >= budget[kind] or usage["active_seconds"] >= budget["active_seconds"]:
-            state["answer"] = "已达到任务执行预算。已保存现有证据和成果，未完成的工作保留在计划中。"
+        usage, turn_usage, budget = state["usage"], state["turn_usage"], state["budget"]
+        if (
+            turn_usage.get(kind, 0) >= budget[kind]
+            or turn_usage["active_seconds"] >= budget["active_seconds"]
+        ):
+            state["answer"] = "已达到本轮执行预算。已保存现有证据和成果，未完成的工作保留在计划中。"
             state.pop("active_started_at", None)
             await self.commit(task, state, "budget_exhausted", {"message": state["answer"]}, status="partial")
             return None
         usage[kind] += 1
+        turn_usage[kind] += 1
         await self.commit(
             task,
             state,
             "model_started" if kind == "model_calls" else "tool_started",
-            {"phase": state["phase"], "call": usage[kind], "tool": (state.get("pending") or {}).get("tool")},
+            {
+                "phase": state["phase"],
+                "call": turn_usage[kind],
+                "turn": state["turn_number"],
+                "tool": (state.get("pending") or {}).get("tool"),
+            },
         )
         return await self.load(task.id)
 
     def account(self, state, usage=None):
-        state["usage"]["active_seconds"] += max(0, time.time() - state.pop("active_started_at", time.time()))
+        elapsed = max(0, time.time() - state.pop("active_started_at", time.time()))
+        state["usage"]["active_seconds"] += elapsed
+        state["turn_usage"]["active_seconds"] += elapsed
         for key in ["input_tokens", "output_tokens"]:
             state["usage"][key] += (usage or {}).get(key, 0)
         a, b = self.settings.input_price_per_million, self.settings.output_price_per_million
@@ -382,8 +429,8 @@ class AgentRuntime:
 
     async def advance(self, task):
         state = task.state
-        remaining = state["budget"]["model_calls"] - state["usage"]["model_calls"]
-        tools_exhausted = state["usage"]["tool_calls"] >= state["budget"]["tool_calls"]
+        remaining = state["budget"]["model_calls"] - state["turn_usage"]["model_calls"]
+        tools_exhausted = state["turn_usage"]["tool_calls"] >= state["budget"]["tool_calls"]
         if state["observations"] and not state.get("finalizing") and (0 < remaining <= 2 or tools_exhausted):
             state = copy.deepcopy(state)
             state.update(
@@ -409,7 +456,16 @@ class AgentRuntime:
         try:
             async with self.db.sessions() as session:
                 built = await memory.build_context(session, task, self.settings)
+                snapshot = await task_context.persist_context_snapshot(
+                    session,
+                    task,
+                    state["usage"]["model_calls"],
+                    phase,
+                    built["context_manifest"],
+                )
                 await session.commit()
+            state["last_context_snapshot_id"] = snapshot.id
+            built.pop("context_manifest", None)
             task._scope_revision = built["scope_revision"]
             state["context_scope_revision"] = built["scope_revision"]
             state["used_memories"] = [
@@ -417,7 +473,7 @@ class AgentRuntime:
                 for m in built["long_term_memories"]
             ]
             context = {**self.context(task), **built}
-            remaining_seconds = state["budget"]["active_seconds"] - state["usage"]["active_seconds"]
+            remaining_seconds = state["budget"]["active_seconds"] - state["turn_usage"]["active_seconds"]
             decision, usage = await asyncio.wait_for(
                 self.model.decide(phase, context),
                 timeout=min(self.settings.llm_timeout, max(0.01, remaining_seconds)),
@@ -456,7 +512,7 @@ class AgentRuntime:
         except Exception as exc:
             if "active_started_at" in state:
                 self.account(state)
-            if state["usage"]["active_seconds"] >= state["budget"]["active_seconds"]:
+            if state["turn_usage"]["active_seconds"] >= state["budget"]["active_seconds"]:
                 state["answer"] = "已达到任务活跃执行时间预算，现有证据与成果已保留。"
                 await self.commit(
                     task, state, "budget_exhausted", {"message": state["answer"]}, status="partial"
@@ -470,13 +526,14 @@ class AgentRuntime:
 
     async def apply_plan(self, task, state, plan):
         if state["plan"]:
-            if state["usage"]["replans"] >= state["budget"]["replans"]:
+            if state["turn_usage"]["replans"] >= state["budget"]["replans"]:
                 state["answer"] = "已达到重规划上限，保留现有成果和待完成步骤。"
                 await self.commit(
                     task, state, "budget_exhausted", {"message": state["answer"]}, status="partial"
                 )
                 return False
             state["usage"]["replans"] += 1
+            state["turn_usage"]["replans"] += 1
         old = {s["id"]: s for s in (state["plan"] or {}).get("steps", [])}
         statuses = state["steps"]
         if state["plans"]:
@@ -622,7 +679,10 @@ class AgentRuntime:
                 return False
             state = copy.deepcopy(task.state)
             try:
-                remaining = max(0.01, state["budget"]["active_seconds"] - state["usage"]["active_seconds"])
+                remaining = max(
+                    0.01,
+                    state["budget"]["active_seconds"] - state["turn_usage"]["active_seconds"],
+                )
                 result, usage = await asyncio.wait_for(
                     auxiliary.call(self.settings, "expand", {"query": pending["arguments"].get("query", "")}),
                     timeout=min(self.settings.llm_timeout, remaining),
@@ -653,7 +713,10 @@ class AgentRuntime:
                 if state["fingerprints"].get(fingerprint, 0) >= 2:
                     raise ValueError("相同参数已重复两次且未增加信息；请换方法或停止")
                 async with self.db.read_sessions() as commerce:
-                    remaining = max(1, state["budget"]["active_seconds"] - state["usage"]["active_seconds"])
+                    remaining = max(
+                        1,
+                        state["budget"]["active_seconds"] - state["turn_usage"]["active_seconds"],
+                    )
                     result = await asyncio.wait_for(
                         invoke(
                             pending["tool"],

@@ -85,9 +85,63 @@ class TaskMemory(Base):
     __tablename__ = "task_memories"
     task_id = Column(ForeignKey("tasks.id"), primary_key=True)
     summary = Column(JSON, default=dict, nullable=False)
+    recent_turns = Column(JSON, default=list, nullable=False)
     through_seq = Column(Integer, default=0, nullable=False)
     version = Column(Integer, default=0, nullable=False)
+    revision = Column(Integer, default=0, nullable=False)
     scope_revision = Column(Integer, default=0, nullable=False)
+    updated_at = Column(Float, default=time.time, nullable=False)
+
+
+class TaskMessage(Base):
+    """完整任务消息；模型上下文只读取其中受预算限制的近期窗口。"""
+
+    __tablename__ = "task_messages"
+    __table_args__ = (UniqueConstraint("task_id", "seq", "role"),)
+    id = Column(String(32), primary_key=True, default=uid)
+    task_id = Column(ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    seq = Column(Integer, nullable=False)
+    role = Column(String(16), nullable=False)
+    kind = Column(String(32), nullable=False)
+    content = Column(Text, nullable=False)
+    scope_revision = Column(Integer, default=0, nullable=False)
+    created_at = Column(Float, default=time.time, nullable=False)
+
+
+class TaskConstraintState(Base):
+    """当前任务唯一生效的结构化约束快照。"""
+
+    __tablename__ = "task_constraint_states"
+    task_id = Column(ForeignKey("tasks.id", ondelete="CASCADE"), primary_key=True)
+    version = Column(Integer, default=1, nullable=False)
+    state = Column(JSON, default=dict, nullable=False)
+    updated_at = Column(Float, default=time.time, nullable=False)
+
+
+class TaskConstraintEvent(Base):
+    """记录约束新增、覆盖与清除，不依赖旧提示词复原状态。"""
+
+    __tablename__ = "task_constraint_events"
+    id = Column(String(32), primary_key=True, default=uid)
+    task_id = Column(ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    from_version = Column(Integer, nullable=False)
+    to_version = Column(Integer, nullable=False)
+    source_message_id = Column(String(32), nullable=False)
+    changes = Column(JSON, default=list, nullable=False)
+    created_at = Column(Float, default=time.time, nullable=False)
+
+
+class ModelContextSnapshot(Base):
+    """保存模型调用采用的上下文标识和版本，不复制完整提示词。"""
+
+    __tablename__ = "model_context_snapshots"
+    __table_args__ = (UniqueConstraint("task_id", "call_number"),)
+    id = Column(String(32), primary_key=True, default=uid)
+    task_id = Column(ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    call_number = Column(Integer, nullable=False)
+    phase = Column(String(24), nullable=False)
+    manifest = Column(JSON, default=dict, nullable=False)
+    created_at = Column(Float, default=time.time, nullable=False)
 
 
 class HistoryUnit(Base):
@@ -100,6 +154,7 @@ class HistoryUnit(Base):
     content = Column(Text, nullable=False)
     search_terms = Column(Text, nullable=False)
     evidence_ids = Column(JSON, default=list, nullable=False)
+    message_ids = Column(JSON, default=list, nullable=False)
     embedding = Column(Vector(512).with_variant(JSON(), "sqlite"))
     model_id = Column(String(200), default="", nullable=False)
     scope_revision = Column(Integer, default=0, nullable=False)

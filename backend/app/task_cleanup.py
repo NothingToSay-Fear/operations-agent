@@ -8,7 +8,11 @@ from app.extension_models import (
     HistoryUnit,
     MemoryCandidate,
     MemoryEvent,
+    ModelContextSnapshot,
+    TaskConstraintEvent,
+    TaskConstraintState,
     TaskMemory,
+    TaskMessage,
     UserMemory,
 )
 from app.models import Artifact, Evidence, Run, Task, TaskEvent
@@ -48,6 +52,10 @@ async def delete_task_contents(session, task: Task) -> None:
 
     # 后台作业必须先删除，使已在途的 Worker 无法再发布处理结果。
     await session.execute(delete(BackgroundJob).where(BackgroundJob.task_id == task.id))
+    await session.execute(delete(ModelContextSnapshot).where(ModelContextSnapshot.task_id == task.id))
+    await session.execute(delete(TaskConstraintEvent).where(TaskConstraintEvent.task_id == task.id))
+    await session.execute(delete(TaskConstraintState).where(TaskConstraintState.task_id == task.id))
+    await session.execute(delete(TaskMessage).where(TaskMessage.task_id == task.id))
     await session.execute(delete(TaskMemory).where(TaskMemory.task_id == task.id))
     await session.execute(delete(HistoryUnit).where(HistoryUnit.task_id == task.id))
     await session.execute(delete(Artifact).where(Artifact.task_id == task.id))

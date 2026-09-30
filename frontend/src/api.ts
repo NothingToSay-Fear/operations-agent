@@ -15,7 +15,8 @@ export type Task = {id: string; goal: string; status: string; revision: number; 
   messages: {role: string; content: string}[];
   plan: null | {summary: string; criteria: {id: string; description: string}[]; steps: {id: string; objective: string; depends_on: string[]; done_when: string}[]; change_reason: string};
   seq: number; plans: any[]; steps: Record<string, {status: string; summary?: string}>; observations: any[];
-  usage: Record<string, number | null>; budget: Record<string, number>; artifacts: any[];
+  usage: Record<string, number | null>; turn_usage: Record<string, number>; turn_number: number;
+  budget: Record<string, number>; artifacts: any[];
   answer: string; waiting_question: string; feedback: string;
 }};
 

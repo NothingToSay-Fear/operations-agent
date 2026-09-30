@@ -6,13 +6,12 @@ import time
 
 from sqlalchemy import func, or_, select
 
-from app import access, retrieval
+from app import access, retrieval, task_context
 from app.extension_models import (
     BackgroundJob,
     HistoryUnit,
     MemoryCandidate,
     MemoryEvent,
-    TaskMemory,
     UserMemory,
 )
 from app.models import Evidence, uid
@@ -20,6 +19,11 @@ from app.models import Evidence, uid
 
 KINDS = {"work_profile", "analysis_preference", "answer_preference", "focus_direction", "stable_constraint"}
 UNSET = object()
+
+
+def _validate_memory_content(content):
+    if re.search(r"(?:密码|密钥|api[_ -]?key)\s*[:：=]|\bsk-[\w-]{12,}", content, re.I):
+        raise ValueError("请勿把访问凭据保存为记忆")
 
 
 async def explicit_forget(session, user_id, text):
@@ -77,8 +81,7 @@ async def propose(
     content = content.strip()
     if kind not in KINDS or not 2 <= len(content) <= 600:
         raise ValueError("记忆类型或长度无效")
-    if re.search(r"(?:密码|密钥|api[_ -]?key)\s*[:：=]|\bsk-[\w-]{12,}", content, re.I):
-        raise ValueError("请勿把访问凭据保存为记忆")
+    _validate_memory_content(content)
     if task and task.user_id != user_id:
         raise ValueError("任务不存在")
     if replaces_id:
@@ -131,6 +134,7 @@ async def confirm(session, user_id, candidate_id, version, *, content=None, kind
     category = kind or candidate.kind
     if category not in KINDS or not 2 <= len(value) <= 600:
         raise ValueError("确认内容无效")
+    _validate_memory_content(value)
     await access.bump_scope(session, [user_id])
     if candidate.replaces_id:
         old = await session.scalar(
@@ -233,6 +237,7 @@ async def append_history(session, task, seq, kind, payload, settings):
         content=content,
         search_terms=" ".join(retrieval.tokens(content)),
         evidence_ids=list(dict.fromkeys(evidence_ids)),
+        message_ids=list(dict.fromkeys(payload.get("message_ids", []))),
         scope_revision=revision,
     )
     session.add(unit)
@@ -245,27 +250,6 @@ async def append_history(session, task, seq, kind, payload, settings):
             await propose(session, task.user_id, match.group(1), task=task, source=text, source_seq=seq)
         session.add(
             BackgroundJob(key="candidates:" + unit.id, kind="candidates", target_id=unit.id, task_id=task.id)
-        )
-    memory = await session.get(TaskMemory, task.id)
-    through = memory.through_seq if memory else 0
-    size = (
-        await session.scalar(
-            select(func.sum(func.length(HistoryUnit.content))).where(
-                HistoryUnit.task_id == task.id, HistoryUnit.seq > through
-            )
-        )
-        or 0
-    )
-    pending = await session.scalar(
-        select(BackgroundJob.id).where(
-            BackgroundJob.task_id == task.id,
-            BackgroundJob.kind == "summary",
-            BackgroundJob.status.in_(["queued", "running", "blocked"]),
-        )
-    )
-    if size >= settings.memory_compact_threshold and not pending:
-        session.add(
-            BackgroundJob(key=f"summary:{task.id}:{seq}", kind="summary", target_id=task.id, task_id=task.id)
         )
 
 
@@ -374,18 +358,34 @@ async def history_search(session, task, query, settings, limit=4, unit_id=None):
 
 async def build_context(session, task, settings):
     revision = await access.scope_revision(session, task.user_id)
-    long_term = await select_memories(
-        session, task.user_id, task.goal + " " + task.state["messages"][-1]["content"], settings
-    )
-    summary = await session.get(TaskMemory, task.id)
-    summary_value = summary.summary if summary and summary.scope_revision == revision else {}
-    messages = task.state["messages"]
-    required_size = len(
-        json.dumps(
-            {"messages": messages, "summary": summary_value, "memories": long_term}, ensure_ascii=False
-        )
-    )
+    constraints, short_term = await task_context.ensure_task_context(session, task, settings)
+    latest = await task_context.latest_user_message(session, task)
+    current_instruction = latest.content if latest else task.goal
+    long_term = await select_memories(session, task.user_id, task.goal + " " + current_instruction, settings)
+    summary_value = short_term.summary if short_term.scope_revision == revision else {}
+    recent_turns = [
+        row
+        for row in list(short_term.recent_turns or [])[-settings.memory_recent_turn_limit :]
+        if row.get("role") == "user" or row.get("scope_revision", revision) == revision
+    ]
+    required = {
+        "current_instruction": current_instruction,
+        "effective_constraints": constraints.state,
+        "task_memory": summary_value,
+        "long_term_memories": long_term,
+    }
+    required_size = len(json.dumps(required, ensure_ascii=False))
+    remaining = max(0, settings.memory_context_char_budget - required_size)
+    selected_turns = []
+    for turn in reversed(recent_turns):
+        size = len(json.dumps(turn, ensure_ascii=False))
+        if size > remaining:
+            break
+        selected_turns.insert(0, turn)
+        remaining -= size
+
     observations, remaining = [], max(0, settings.memory_context_char_budget - required_size)
+    remaining -= sum(len(json.dumps(turn, ensure_ascii=False)) for turn in selected_turns)
     for observation in reversed(task.state["observations"]):
         if not await access.references_allowed(session, task.user_id, observation.get("data", {})):
             continue
@@ -394,15 +394,48 @@ async def build_context(session, task, settings):
             break
         observations.insert(0, observation)
         remaining -= size
-    # 明确约束不做有损摘要；上下文过大时显式暂停，而不默默遗忘用户条件。
-    if len(json.dumps(messages, ensure_ascii=False)) > settings.memory_context_char_budget:
+    # 明确约束不做有损摘要；约束本身过大时显式暂停，而不默默丢弃用户条件。
+    if required_size > settings.memory_context_char_budget:
         raise ValueError("明确用户约束超出上下文上限，请整理当前目标后继续")
+    evidence_ids = list(
+        dict.fromkeys(
+            evidence_id
+            for observation in observations
+            for evidence_id in re.findall(r"ev_[a-zA-Z0-9_-]+", json.dumps(observation, ensure_ascii=False))
+        )
+    )
+    history_unit_ids = list(
+        dict.fromkeys(
+            row.get("id")
+            for observation in observations
+            if observation.get("tool") in {"search_task_history", "read_task_history"}
+            for row in observation.get("data", {}).get("rows", [])
+            if row.get("id")
+        )
+    )
     return {
         "scope_revision": revision,
+        "current_instruction": current_instruction,
+        "effective_constraints": constraints.state,
+        "constraint_state_version": constraints.version,
         "long_term_memories": long_term,
         "task_memory": summary_value,
-        "memory_summary_version": summary.version if summary else 0,
-        "messages": messages,
+        "memory_summary_version": short_term.version,
+        "memory_state_revision": short_term.revision,
+        "recent_turns": selected_turns,
+        "messages": selected_turns,
         "observations": observations,
         "history_scope": "current_task_only",
+        "context_manifest": {
+            "scope_revision": revision,
+            "constraint_state_version": constraints.version,
+            "memory_summary_version": short_term.version,
+            "memory_state_revision": short_term.revision,
+            "current_message_id": latest.id if latest else None,
+            "recent_message_ids": [row.get("message_id") for row in selected_turns],
+            "long_term_memory_versions": [{"id": row["id"], "version": row["version"]} for row in long_term],
+            "evidence_ids": evidence_ids,
+            "history_unit_ids": history_unit_ids,
+            "history_scope": "current_task_only",
+        },
     }

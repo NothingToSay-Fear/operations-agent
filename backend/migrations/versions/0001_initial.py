@@ -1,6 +1,7 @@
-"""初始化任务、身份、证据、成果及资料数据表。"""
+"""初始化完整应用库结构。"""
 
 from alembic import op
+from sqlalchemy import text
 
 from app.models import Base
 
@@ -11,7 +12,22 @@ depends_on = None
 
 
 def upgrade():
-    Base.metadata.create_all(bind=op.get_bind())
+    bind = op.get_bind()
+    Base.metadata.create_all(bind=bind)
+    if bind.dialect.name == "postgresql":
+        for table in ("knowledge_segments", "history_units"):
+            bind.execute(
+                text(
+                    f"CREATE INDEX IF NOT EXISTS ix_{table}_terms "
+                    f"ON {table} USING gin (to_tsvector('simple', search_terms))"
+                )
+            )
+            bind.execute(
+                text(
+                    f"CREATE INDEX IF NOT EXISTS ix_{table}_vector "
+                    f"ON {table} USING hnsw (embedding vector_cosine_ops)"
+                )
+            )
 
 
 def downgrade():

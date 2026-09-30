@@ -1,3 +1,4 @@
+import copy
 import json
 
 from httpx import ASGITransport, AsyncClient
@@ -21,6 +22,12 @@ async def test_auth_task_and_cross_user_isolation(client):
 async def test_control_preserves_budget_and_invalidates_old_work(client):
     task = (await client.post("/api/tasks", json={"goal": "分析库存"})).json()
     task_id = task["id"]
+    async with client.test_app.state.db.sessions() as session, session.begin():
+        stored = await session.get(Task, task_id)
+        state = copy.deepcopy(stored.state)
+        state["usage"]["model_calls"] = 29
+        state["turn_usage"]["model_calls"] = 29
+        stored.state = state
     paused = (await client.post(f"/api/tasks/{task_id}/control", json={"action": "pause"})).json()
     assert paused["status"] == "paused"
     revised = (
@@ -30,6 +37,9 @@ async def test_control_preserves_budget_and_invalidates_old_work(client):
     ).json()
     assert revised["state"]["constraint_version"] == 2
     assert revised["state"]["budget"] == task["state"]["budget"]
+    assert revised["state"]["usage"]["model_calls"] == 29
+    assert revised["state"]["turn_usage"]["model_calls"] == 0
+    assert revised["state"]["turn_number"] == 2
     assert revised["state"]["messages"][-1]["content"] == "只分析SKU-0001"
     await client.post(f"/api/tasks/{task_id}/control", json={"action": "cancel"})
     events = await client.get(f"/api/tasks/{task_id}/events?after=1")

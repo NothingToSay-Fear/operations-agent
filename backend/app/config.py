@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     query_expansion_limit: int = 2
     memory_context_char_budget: int = 24000
     memory_compact_threshold: int = 18000
+    memory_recent_turn_limit: int = 12
+    memory_turn_char_limit: int = 2000
     maintenance_max_model_calls: int = 6
     maintenance_max_seconds: int = 180
     background_lease_seconds: int = 180

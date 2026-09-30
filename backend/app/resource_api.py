@@ -17,6 +17,7 @@ from app.extension_models import (
     KnowledgeSegment,
     MemoryCandidate,
     MemoryEvent,
+    ModelContextSnapshot,
     SourceSetting,
     UserMemory,
 )
@@ -381,12 +382,27 @@ def router(database, settings):
                     .limit(20)
                 )
             )
+            snapshots = list(
+                await session.scalars(
+                    select(ModelContextSnapshot)
+                    .where(ModelContextSnapshot.task_id == task_id)
+                    .order_by(ModelContextSnapshot.call_number.desc())
+                    .limit(20)
+                )
+            )
             return {
                 "summary": built["task_memory"],
                 "summary_version": built["memory_summary_version"],
+                "memory_state_revision": built["memory_state_revision"],
+                "effective_constraints": built["effective_constraints"],
+                "constraint_state_version": built["constraint_state_version"],
+                "recent_turns": built["recent_turns"],
                 "selected_memories": built["long_term_memories"],
                 "used_memories": task.state.get("used_memories", []),
                 "jobs": [serialize(j, "id kind status error usage") for j in jobs],
+                "context_snapshots": [
+                    serialize(row, "id call_number phase manifest created_at") for row in snapshots
+                ],
                 "history_scope": "current_task_only",
             }
 

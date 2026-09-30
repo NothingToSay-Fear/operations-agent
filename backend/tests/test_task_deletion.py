@@ -6,7 +6,11 @@ from app.extension_models import (
     HistoryUnit,
     MemoryCandidate,
     MemoryEvent,
+    ModelContextSnapshot,
+    TaskConstraintEvent,
+    TaskConstraintState,
     TaskMemory,
+    TaskMessage,
     UserMemory,
 )
 from app.models import Artifact, Evidence, Run, Task, TaskEvent
@@ -23,6 +27,8 @@ async def test_delete_task_removes_all_related_content_and_preserves_unrelated_m
         stored.status = "running"
         stored.lease_owner = "test-worker"
         stored.lease_until = 9999999999
+        task_memory = await session.get(TaskMemory, task_id)
+        task_memory.summary = {"summary": "待删除"}
         candidate = MemoryCandidate(
             user_id=user_id,
             task_id=task_id,
@@ -72,7 +78,6 @@ async def test_delete_task_removes_all_related_content_and_preserves_unrelated_m
                     title="测试成果",
                     content="待删除",
                 ),
-                TaskMemory(task_id=task_id, summary={"summary": "待删除"}),
                 MemoryEvent(
                     user_id=user_id,
                     memory_id=derived_memory.id,
@@ -97,11 +102,21 @@ async def test_delete_task_removes_all_related_content_and_preserves_unrelated_m
 
     async with database.sessions() as session:
         assert await session.get(Task, task_id) is None
-        for model in (Run, TaskEvent, Evidence, Artifact, BackgroundJob, TaskMemory, HistoryUnit):
+        for model in (
+            Run,
+            TaskEvent,
+            Evidence,
+            Artifact,
+            BackgroundJob,
+            TaskMemory,
+            TaskMessage,
+            TaskConstraintState,
+            TaskConstraintEvent,
+            ModelContextSnapshot,
+            HistoryUnit,
+        ):
             assert await session.scalar(select(model).where(model.task_id == task_id)) is None
-        assert await session.scalar(
-            select(MemoryCandidate).where(MemoryCandidate.task_id == task_id)
-        ) is None
+        assert await session.scalar(select(MemoryCandidate).where(MemoryCandidate.task_id == task_id)) is None
         assert await session.scalar(select(MemoryEvent).where(MemoryEvent.task_id == task_id)) is None
         assert await session.get(UserMemory, derived_memory.id) is None
         assert await session.get(UserMemory, independent_memory.id) is not None

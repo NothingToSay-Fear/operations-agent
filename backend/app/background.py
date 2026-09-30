@@ -108,12 +108,8 @@ async def reserve_model(database, job_id, token, settings):
             raise ValueError("当前任务的后台模型调用预算已耗尽")
         task = await session.scalar(select(Task).where(Task.id == job.task_id).with_for_update())
         state = copy.deepcopy(task.state)
-        if state["usage"]["model_calls"] >= state["budget"]["model_calls"]:
-            raise ValueError("当前任务的共享模型调用预算已耗尽")
-        if state["observations"] and state["budget"]["model_calls"] - state["usage"]["model_calls"] <= 2:
-            raise ValueError("剩余额度保留给任务最终交付，暂停后台模型维护")
         state["usage"]["model_calls"] += 1
-        # 维护用量不改变业务决策版本；前台在提交时按增量合并，避免丢弃在途模型结果。
+        # 维护任务使用独立上限，只累计总成本，不占用用户新一轮的交互预算。
         task.state = state
         job.usage = {**(job.usage or {}), "model_calls": (job.usage or {}).get("model_calls", 0) + 1}
 
@@ -149,27 +145,26 @@ async def prepare(database, settings, job, token):
             snapshot = {"text": text, "source_seq": unit.seq, "scope_revision": revision}
         else:
             previous = await session.get(TaskMemory, task.id)
-            units = list(
-                await session.scalars(
-                    select(HistoryUnit).where(HistoryUnit.task_id == task.id).order_by(HistoryUnit.seq)
-                )
-            )
-            units = [u for u in units if await memory.unit_allowed(session, task, u, revision)]
-            valid_ids = {u.id for u in units}
-            # 保留最近窗口，摘要只压缩较早且能够追溯的历史。
-            units = units[:-6] if len(units) > 6 else units
-            content, size = [], 0
-            through = previous.through_seq if previous and previous.scope_revision == revision else 0
-            for unit in units:
-                if unit.seq <= through:
-                    continue
-                if size + len(unit.content) > settings.memory_context_char_budget:
-                    break
-                content.append({"id": unit.id, "text": unit.content})
-                size += len(unit.content)
+            if not previous:
+                raise ValueError("任务近期窗口不存在")
+            recent_turns = list(previous.recent_turns or [])
+            if len(recent_turns) <= 4:
+                raise ValueError("近期消息尚未达到压缩条件")
+            keep_count = settings.memory_recent_turn_limit
+            if len(recent_turns) <= keep_count:
+                keep_count = max(2, keep_count // 2)
+            compacted_turns = recent_turns[:-keep_count]
+            retained_turns = recent_turns[-keep_count:]
+            content = [
+                {
+                    "id": row["message_id"],
+                    "text": f"[{row['role']}] {row['content']}",
+                }
+                for row in compacted_turns
+            ]
             ids = [row["id"] for row in content]
-            previous_summary = previous.summary if previous and previous.scope_revision == revision else {}
-            allowed_ids = sorted(set(ids) | (set(previous_summary.get("source_ids", [])) & valid_ids))
+            previous_summary = previous.summary if previous.scope_revision == revision else {}
+            allowed_ids = sorted(set(ids) | set(previous_summary.get("source_ids", [])))
             prompt = {
                 "previous": previous_summary,
                 "history": content,
@@ -178,8 +173,13 @@ async def prepare(database, settings, job, token):
             snapshot = {
                 "scope_revision": revision,
                 "source_ids": allowed_ids,
-                "through_seq": max((u.seq for u in units if u.id in ids), default=through),
-                "previous_version": previous.version if previous else 0,
+                "through_seq": max(
+                    (row.get("seq", previous.through_seq) for row in compacted_turns),
+                    default=previous.through_seq,
+                ),
+                "previous_version": previous.version,
+                "previous_revision": previous.revision,
+                "retained_turns": retained_turns,
             }
     await reserve_model(database, job.id, token, settings)
     result, usage = await auxiliary.call(settings, job.kind, prompt)
@@ -252,14 +252,20 @@ async def process(database, settings, job_id, token):
                         )
                 else:
                     current = await session.get(TaskMemory, task.id)
-                    if current and current.version != prepared["previous_version"]:
-                        raise ValueError("摘要版本已变化")
+                    if current and (
+                        current.version != prepared["previous_version"]
+                        or current.revision != prepared["previous_revision"]
+                    ):
+                        raise ValueError("摘要或近期消息版本已变化")
                     if not current:
-                        current = TaskMemory(task_id=task.id, version=0)
+                        current = TaskMemory(task_id=task.id, version=0, revision=0)
                         session.add(current)
                     current.summary, current.through_seq = prepared["result"], prepared["through_seq"]
+                    current.recent_turns = prepared["retained_turns"]
                     current.version += 1
+                    current.revision += 1
                     current.scope_revision = revision
+                    current.updated_at = time.time()
             job.status, job.progress, job.error = "completed", 100, prepared.get("error", "")
             job.usage = {
                 **job.usage,

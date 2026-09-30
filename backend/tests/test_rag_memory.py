@@ -7,13 +7,16 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select, update
 
-from app import access, background, knowledge, memory
+from app import access, background, knowledge, memory, task_context
 from app.agent.runtime import AgentRuntime, ContextChanged, initial_state
 from app.document_parser import parse_document
 from app.extension_models import (
     BackgroundJob,
     DocumentScope,
     HistoryUnit,
+    ModelContextSnapshot,
+    TaskConstraintEvent,
+    TaskMessage,
     TaskMemory,
 )
 from app.main import ensure_admin
@@ -42,9 +45,7 @@ async def test_admin_public_sources_and_independent_user_settings(client, settin
     ).status_code == 403
 
     async with AsyncClient(transport=ASGITransport(app=client.test_app), base_url="http://test") as admin:
-        signed_in = await admin.post(
-            "/api/auth/login", json={"username": "admin", "password": "adminadmin"}
-        )
+        signed_in = await admin.post("/api/auth/login", json={"username": "admin", "password": "adminadmin"})
         assert signed_in.status_code == 200
         assert signed_in.json()["is_admin"] is True
         doc = (
@@ -85,9 +86,7 @@ async def test_admin_public_sources_and_independent_user_settings(client, settin
         async with AsyncClient(
             transport=ASGITransport(app=client.test_app), base_url="http://test"
         ) as admin_delete:
-            await admin_delete.post(
-                "/api/auth/login", json={"username": "admin", "password": "adminadmin"}
-            )
+            await admin_delete.post("/api/auth/login", json={"username": "admin", "password": "adminadmin"})
             assert (await admin_delete.delete(f"/api/documents/{doc['id']}")).status_code == 200
         assert (await bob.get("/api/documents")).json() == []
         assert (await bob.get(f"/api/documents/{doc['id']}/content")).status_code == 404
@@ -158,6 +157,121 @@ async def test_explicit_remember_is_only_candidate(client):
     candidates = (await client.get("/api/memory-candidates")).json()
     assert len(candidates) == 1 and candidates[0]["task_id"] == task["id"]
     assert (await client.get("/api/memories")).json() == []
+
+
+async def test_effective_constraints_replace_old_turn_and_full_messages_remain(client):
+    goal = "分析数据截止日期之前七天的GMV，结合渠道和商品数据，给出三个有证据的运营建议。"
+    task = (await client.post("/api/tasks", json={"goal": goal})).json()
+    follow_up = "不看商品了，只分析渠道，建议改成两条。"
+    response = await client.post(
+        f"/api/tasks/{task['id']}/control",
+        json={"action": "message", "message": follow_up},
+    )
+    assert response.status_code == 200
+
+    context = (await client.get(f"/api/tasks/{task['id']}/memory")).json()
+    business = context["effective_constraints"]["business_constraints"]
+    assert business["metrics"] == ["paid_gmv"]
+    assert business["dimensions"] == ["channel"]
+    assert context["effective_constraints"]["output_requirements"]["recommendation_count"] == 2
+    assert context["constraint_state_version"] == 2
+
+    conversation = (await client.get(f"/api/tasks/{task['id']}/conversation")).json()
+    assert [row["content"] for row in conversation if row["role"] == "user"] == [goal, follow_up]
+    database = client.test_app.state.db
+    async with database.sessions() as session:
+        assert (
+            len(list(await session.scalars(select(TaskMessage).where(TaskMessage.task_id == task["id"]))))
+            == 2
+        )
+        event = await session.scalar(
+            select(TaskConstraintEvent).where(TaskConstraintEvent.task_id == task["id"])
+        )
+        assert event.from_version == 1 and event.to_version == 2
+
+
+async def test_recent_window_is_bounded_and_context_manifest_is_persisted(database, settings):
+    settings = settings.model_copy(update={"memory_recent_turn_limit": 4})
+    async with database.sessions() as session:
+        task = Task(user_id="test-user", goal="分析GMV", state=initial_state("分析GMV", settings))
+        session.add(task)
+        await session.flush()
+        await task_context.record_user_message(session, task, 0, task.goal, settings, kind="goal")
+        for seq in range(1, 8):
+            await task_context.record_user_message(session, task, seq, f"第{seq}轮只分析渠道", settings)
+        built = await memory.build_context(session, task, settings)
+        assert len(built["recent_turns"]) == 4
+        assert built["recent_turns"][0]["content"] == "第4轮只分析渠道"
+        snapshot = await task_context.persist_context_snapshot(
+            session, task, 1, "plan", built["context_manifest"]
+        )
+        await session.commit()
+        assert (
+            len(list(await session.scalars(select(TaskMessage).where(TaskMessage.task_id == task.id)))) == 8
+        )
+        stored = await session.get(ModelContextSnapshot, snapshot.id)
+        assert stored.manifest["constraint_state_version"] == 8
+        assert stored.manifest["recent_message_ids"] == [row["message_id"] for row in built["recent_turns"]]
+
+
+async def test_summary_cannot_overwrite_message_appended_during_compression(database, settings, monkeypatch):
+    from app import auxiliary
+
+    settings = settings.model_copy(
+        update={"llm_model": "测试协议", "llm_api_key": "测试替身凭据", "memory_recent_turn_limit": 4}
+    )
+    async with database.sessions() as session:
+        task = Task(user_id="test-user", goal="分析渠道", state=initial_state("分析渠道", settings))
+        session.add(task)
+        await session.flush()
+        for seq in range(5):
+            await task_context.record_user_message(session, task, seq, f"第{seq}轮分析渠道", settings)
+        await session.commit()
+        job = await session.scalar(
+            select(BackgroundJob).where(BackgroundJob.task_id == task.id, BackgroundJob.kind == "summary")
+        )
+        job.status, job.lease_token, job.lease_until, job.attempts = (
+            "running",
+            "并发压缩令牌",
+            time.time() + 120,
+            1,
+        )
+        await session.commit()
+
+    async def append_during_summary(_settings, kind, payload):
+        async with database.sessions() as session:
+            stored = await session.get(Task, task.id)
+            await task_context.record_user_message(session, stored, 5, "压缩期间新增消息", settings)
+            await session.commit()
+        return {
+            "summary": "旧快照摘要",
+            "decisions": [],
+            "open_questions": [],
+            "source_ids": payload["source_ids"],
+        }, {"input_tokens": 1, "output_tokens": 1}
+
+    monkeypatch.setattr(auxiliary, "call", append_during_summary)
+    await background.process(database, settings, job.id, "并发压缩令牌")
+    async with database.sessions() as session:
+        stored_job = await session.get(BackgroundJob, job.id)
+        stored_memory = await session.get(TaskMemory, task.id)
+        assert stored_job.status == "queued"
+        assert stored_memory.summary == {}
+        assert stored_memory.recent_turns[-1]["content"] == "压缩期间新增消息"
+
+
+async def test_memory_confirmation_revalidates_edited_secret(client):
+    candidate = (
+        await client.post(
+            "/api/memory-candidates",
+            json={"content": "回答使用表格", "kind": "answer_preference"},
+        )
+    ).json()
+    response = await client.post(
+        f"/api/memory-candidates/{candidate['id']}/confirm",
+        json={"version": 1, "content": "API_KEY=sk-this-must-not-be-stored"},
+    )
+    assert response.status_code == 409
 
 
 async def test_history_never_crosses_same_users_tasks(database, settings):
@@ -242,13 +356,17 @@ async def test_missing_model_blocks_compaction_without_fake_summary(database, se
         task = Task(user_id="test-user", goal="摘要", state=initial_state("摘要", settings))
         session.add(task)
         await session.flush()
+        for seq in range(5):
+            await task_context.record_user_message(
+                session, task, seq, "摘要" if seq == 0 else f"第{seq}轮讨论", settings
+            )
         session.add(BackgroundJob(key="summary:test", kind="summary", target_id=task.id, task_id=task.id))
         await session.commit()
     job = await background.claim(database, settings)
     await background.process(database, settings, *job)
     async with database.sessions() as session:
         assert (await session.get(BackgroundJob, job[0])).status == "blocked"
-        assert await session.get(TaskMemory, task.id) is None
+        assert (await session.get(TaskMemory, task.id)).summary == {}
 
 
 def test_structured_parser_preserves_headings_tables_and_page_context():
@@ -275,6 +393,13 @@ async def test_summary_and_candidate_jobs_use_real_contracts_and_shared_budget(
         session.add(task)
         await session.flush()
         for seq in range(8):
+            await task_context.record_user_message(
+                session,
+                task,
+                seq,
+                task.goal if seq == 0 else f"我通常先看毛利，讨论 {seq}",
+                settings,
+            )
             await memory.append_history(
                 session, task, seq, "user", {"content": f"我通常先看毛利，讨论 {seq}"}, settings
             )
@@ -335,6 +460,7 @@ async def test_summary_and_candidate_jobs_use_real_contracts_and_shared_budget(
         assert stored.state["usage"]["input_tokens"] == 22
         old_sources = set((await session.get(TaskMemory, task.id)).summary["source_ids"])
         for seq in (8, 9):
+            await task_context.record_user_message(session, stored, seq, "继续讨论毛利", settings)
             await memory.append_history(session, stored, seq, "user", {"content": "继续讨论毛利"}, settings)
         second = BackgroundJob(
             key="summary:second",

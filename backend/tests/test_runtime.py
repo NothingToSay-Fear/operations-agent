@@ -119,6 +119,7 @@ async def test_invalid_decision_retries_preserve_usage_and_stop(database, settin
         assert task.status == "failed"
         assert task.state["invalid_outputs"] == 3
         assert task.state["usage"]["model_calls"] == 3
+        assert task.state["turn_usage"]["model_calls"] == 3
         assert task.state["usage"]["input_tokens"] == 300
         assert task.state["usage"]["output_tokens"] == 150
 
@@ -149,12 +150,13 @@ async def test_background_usage_does_not_discard_inflight_decision(database, set
     await runtime.commit(task, state, "decision_verified", {})
     current = await runtime.load(tid)
     assert current.state["usage"]["model_calls"] == 2
+    assert current.state["turn_usage"]["model_calls"] == 1
     assert current.state["usage"]["input_tokens"] == 100
     assert current.state["usage"]["output_tokens"] == 50
     assert current.revision == task.revision + 1
 
 
-async def test_background_budget_race_never_over_reserves(database, settings):
+async def test_background_budget_does_not_consume_interactive_turn(database, settings):
     import time
     from app import background
     from app.extension_models import BackgroundJob
@@ -176,10 +178,10 @@ async def test_background_budget_race_never_over_reserves(database, settings):
         )
         session.add(job)
     await background.reserve_model(database, job.id, "test-token", settings)
-    with pytest.raises(LeaseLost):
-        await runtime.reserve(stale, "model_calls")
+    await runtime.reserve(stale, "model_calls")
     current = await runtime.load(tid)
-    assert current.state["usage"]["model_calls"] == 1
+    assert current.state["usage"]["model_calls"] == 2
+    assert current.state["turn_usage"]["model_calls"] == 1
     assert await runtime.reserve(current, "model_calls") is None
 
 
@@ -284,7 +286,7 @@ async def test_last_calls_are_reserved_for_grounded_delivery(database, settings)
         assert task.state["usage"]["tool_calls"] == 0
 
 
-async def test_maintenance_cannot_consume_last_delivery_calls(database, settings):
+async def test_maintenance_has_separate_budget_from_interactive_delivery(database, settings):
     import time
     from app import background
     from app.extension_models import BackgroundJob
@@ -302,10 +304,11 @@ async def test_maintenance_cannot_consume_last_delivery_calls(database, settings
             lease_until=time.time() + 60,
         )
         session.add(job)
-    with pytest.raises(ValueError, match="最终交付"):
-        await background.reserve_model(database, job.id, "test-token", settings)
+    await background.reserve_model(database, job.id, "test-token", settings)
     async with database.sessions() as session:
-        assert (await session.get(Task, tid)).state["usage"]["model_calls"] == 0
+        state = (await session.get(Task, tid)).state
+        assert state["usage"]["model_calls"] == 1
+        assert state["turn_usage"]["model_calls"] == 0
 
 
 async def test_real_tools_plan_revision_artifacts_and_finish(database, settings):
@@ -351,6 +354,7 @@ async def test_budget_is_not_reset_when_resumed(database, settings):
         task = await session.get(Task, tid)
         state = copy.deepcopy(task.state)
         state["usage"]["model_calls"] = state["budget"]["model_calls"]
+        state["turn_usage"]["model_calls"] = state["budget"]["model_calls"]
         task.state = state
     await AgentRuntime(database, settings, ProtocolModel()).run(tid)
     async with database.sessions() as session:

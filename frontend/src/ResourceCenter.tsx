@@ -73,6 +73,10 @@ export default function ResourceCenter({open,onClose,initialTab='documents',task
       </>},
       {key:'task',label:'当前任务记忆',children:taskId&&taskMemory?<>
         <Alert type="info" message="历史检索仅限当前任务；摘要不能代替最新业务事实。"/>
+        <p>当前有效约束 · v{taskMemory.constraint_state_version}</p>
+        <pre className="source-text">{JSON.stringify(taskMemory.effective_constraints,null,2)}</pre>
+        <p>近期原文窗口 · {taskMemory.recent_turns?.length||0} 条</p>
+        <div className="resource-list">{taskMemory.recent_turns?.map((turn:any)=><div className="resource-card" key={turn.message_id}><Tag>{turn.role==='user'?'用户':'Agent'}</Tag>{turn.content}</div>)}</div>
         <p>摘要版本：{taskMemory.summary_version}</p><pre className="source-text">{taskMemory.summary.summary||'尚未达到压缩阈值，使用当前目标、明确条件及近期观察。'}</pre>
         <p>本任务最近采用的长期记忆</p>{taskMemory.used_memories?.map((m:any)=><div className="resource-card" key={m.id}>{memories.find(x=>x.id===m.id)?.content||'记忆已删除或失效'}<small className="muted"> · {m.reason}</small></div>)}
         <div className="resource-list">{taskMemory.jobs.map((j:any)=><div className="resource-card" key={j.id}>{j.kind==='summary'?'历史压缩':'候选提取'} · {statuses[j.status]||j.status}<p className="resource-warning">{j.error}</p></div>)}</div>

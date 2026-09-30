@@ -13,13 +13,13 @@ from pydantic import Field
 from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 
-from app import access, analytics, background, memory
+from app import access, analytics, background, memory, task_context
 from app.agent.runtime import TERMINAL, initial_state, worker
 from app.analytics import Query, StrictModel
 from app.auth import current_user, hash_password, token_hash, verify_password
 from app.config import get_settings
 from app.db import Database
-from app.extension_models import DocumentScope, SourceSetting
+from app.extension_models import DocumentScope, SourceSetting, TaskMessage
 from app.models import Artifact, Base, Document, Evidence, Run, Session, Task, TaskEvent, User, uid
 from app.task_cleanup import delete_task_contents
 
@@ -71,9 +71,7 @@ async def conversation_view(session, task):
     """从持久化事件恢复按时间排列的用户问题和 Agent 回复。"""
     revision = await access.scope_revision(session, task.user_id)
     rows = list(
-        await session.scalars(
-            select(TaskEvent).where(TaskEvent.task_id == task.id).order_by(TaskEvent.seq)
-        )
+        await session.scalars(select(TaskEvent).where(TaskEvent.task_id == task.id).order_by(TaskEvent.seq))
     )
     turns = [
         {
@@ -146,7 +144,26 @@ async def conversation_view(session, task):
                 "created_at": task.updated_at,
             }
         )
-    return turns
+    persisted = list(
+        await session.scalars(
+            select(TaskMessage).where(TaskMessage.task_id == task.id).order_by(TaskMessage.seq)
+        )
+    )
+    merged = {(row["seq"], row["role"]): row for row in turns}
+    for row in persisted:
+        content, kind = row.content, row.kind
+        if row.role == "assistant" and row.scope_revision != revision:
+            content = "原资料或记忆范围已变化，此历史回复已隐藏，请重新提问以核验。"
+            kind = "notice"
+        merged[(row.seq, row.role)] = {
+            "id": row.id,
+            "seq": row.seq,
+            "role": row.role,
+            "kind": kind,
+            "content": content,
+            "created_at": row.created_at,
+        }
+    return sorted(merged.values(), key=lambda row: (row["seq"], 0 if row["role"] == "user" else 1))
 
 
 async def safe_task_view(session, task):
@@ -224,9 +241,7 @@ async def ensure_admin(database, settings):
                 scope.revision += 1
                 changed_ids.append(document.id)
         if changed_ids:
-            await session.execute(
-                delete(SourceSetting).where(SourceSetting.document_id.in_(changed_ids))
-            )
+            await session.execute(delete(SourceSetting).where(SourceSetting.document_id.in_(changed_ids)))
             await access.bump_scope(session, list(await session.scalars(select(User.id))))
         await session.commit()
 
@@ -394,7 +409,17 @@ def create_app(settings=None, *, start_worker=True, model=None):
             )
             session.add(task)
             await session.flush()
-            await memory.append_history(session, task, 0, "user", {"content": task.goal}, settings)
+            message, _ = await task_context.record_user_message(
+                session, task, 0, task.goal, settings, kind="goal"
+            )
+            await memory.append_history(
+                session,
+                task,
+                0,
+                "user",
+                {"content": task.goal, "message_ids": [message.id]},
+                settings,
+            )
             notice = await memory.explicit_forget(session, user.id, task.goal)
             if notice:
                 task.state = {**task.state, "answer": notice}
@@ -426,9 +451,7 @@ def create_app(settings=None, *, start_worker=True, model=None):
     async def delete_task(task_id: str, user=Depends(current_user)):
         async with database.sessions() as session, session.begin():
             task = await session.scalar(
-                select(Task)
-                .where(Task.id == task_id, Task.user_id == user.id)
-                .with_for_update()
+                select(Task).where(Task.id == task_id, Task.user_id == user.id).with_for_update()
             )
             if task is None:
                 raise HTTPException(404, "任务不存在")
@@ -439,7 +462,7 @@ def create_app(settings=None, *, start_worker=True, model=None):
     async def control(task_id: str, body: Control, user=Depends(current_user)):
         async with database.sessions() as session:
             task = await own_task(session, task_id, user.id)
-            await access.scope_revision(session, user.id, lock=True)
+            scope_revision = await access.scope_revision(session, user.id, lock=True)
             task = await session.scalar(
                 select(Task)
                 .where(Task.id == task_id)
@@ -458,6 +481,7 @@ def create_app(settings=None, *, start_worker=True, model=None):
             )
             if notice:
                 state["messages"].append({"role": "user", "content": body.message.strip()})
+                state["messages"] = state["messages"][-settings.memory_recent_turn_limit :]
                 state["answer"] = notice
                 status = task.status
             elif body.action == "pause":
@@ -476,6 +500,7 @@ def create_app(settings=None, *, start_worker=True, model=None):
             else:
                 status = "queued"
                 state["messages"].append({"role": "user", "content": body.message.strip()})
+                state["messages"] = state["messages"][-settings.memory_recent_turn_limit :]
                 state["constraint_version"] += 1
                 state["steps"] = {}
                 state["step_tools"] = {}
@@ -487,7 +512,17 @@ def create_app(settings=None, *, start_worker=True, model=None):
                 state["answer"] = ""
                 state["invalid_outputs"] = 0
             if state.get("active_started_at"):
-                state["usage"]["active_seconds"] += max(0, time.time() - state.pop("active_started_at"))
+                elapsed = max(0, time.time() - state.pop("active_started_at"))
+                state["usage"]["active_seconds"] += elapsed
+                state["turn_usage"]["active_seconds"] += elapsed
+            if body.action == "message":
+                state["turn_number"] += 1
+                state["turn_usage"] = {
+                    "model_calls": 0,
+                    "tool_calls": 0,
+                    "replans": 0,
+                    "active_seconds": 0,
+                }
             state["seq"] += 1
             result = await session.execute(
                 update(Task)
@@ -507,8 +542,32 @@ def create_app(settings=None, *, start_worker=True, model=None):
             session.add(
                 TaskEvent(task_id=task_id, seq=state["seq"], kind="user_control", payload=body.model_dump())
             )
+            task_message = None
+            if body.action == "message":
+                task_message, _ = await task_context.record_user_message(
+                    session,
+                    task,
+                    state["seq"],
+                    body.message,
+                    settings,
+                    update_constraints=not bool(notice),
+                )
+            history_payload = body.model_dump()
+            if task_message:
+                history_payload["message_ids"] = [task_message.id]
+            if notice:
+                reply = await task_context.record_assistant_message(
+                    session,
+                    task,
+                    state["seq"],
+                    notice,
+                    settings,
+                    kind="notice",
+                    scope_revision=scope_revision,
+                )
+                history_payload.setdefault("message_ids", []).append(reply.id)
             await memory.append_history(
-                session, task, state["seq"], "user_control", body.model_dump(), settings
+                session, task, state["seq"], "user_control", history_payload, settings
             )
             await session.execute(
                 update(Run)
@@ -575,6 +634,8 @@ def create_app(settings=None, *, start_worker=True, model=None):
             return {
                 "plans": (await safe_task_view(session, task))["state"]["plans"],
                 "usage": task.state["usage"],
+                "turn_usage": task.state["turn_usage"],
+                "turn_number": task.state["turn_number"],
                 "budget": task.state["budget"],
                 "runs": [
                     {
