@@ -82,6 +82,49 @@ def initial_state(goal, settings):
 
 
 def compact(value, maximum=4500):
+    current = value
+    observation = {}
+    while isinstance(current, dict):
+        if "evidence_id" in current:
+            observation = {
+                key: current[key]
+                for key in (
+                    "evidence_id",
+                    "step_id",
+                    "plan_version",
+                    "tool",
+                    "arguments",
+                    "status",
+                    "error_code",
+                    "constraint_version",
+                    "subtask_id",
+                )
+                if key in current
+            }
+        summary = current.get("risk_summary")
+        if isinstance(summary, dict):
+            rows = list(summary.get("rows") or [])
+            compact_summary = {**summary, "rows": rows}
+            result = {
+                key: current[key]
+                for key in ("as_of", "demand_days", "total_positions", "truncated", "warnings")
+                if key in current
+            }
+            while rows and len(json.dumps({**result, "risk_summary": compact_summary}, ensure_ascii=False, default=str)) > maximum:
+                rows.pop()
+                compact_summary = {
+                    **summary,
+                    "rows": rows,
+                    "shown_positions": len(rows),
+                    "truncated": True,
+                }
+            compacted = {
+                **result,
+                "risk_summary": compact_summary,
+                "instruction": "库存风险摘要已包含最高优先级仓位；仅在用户要求完整清单时调用 read_evidence。",
+            }
+            return {**observation, "data": compacted} if observation else compacted
+        current = current.get("data", current.get("result"))
     text = json.dumps(value, ensure_ascii=False, default=str)
     if len(text) <= maximum:
         return value
@@ -101,7 +144,14 @@ def compact_observations(rows, *, maximum_rows, maximum_chars):
     """按最近优先保留可审计观测，避免工具原始结果挤占主 Agent 上下文。"""
     selected = []
     for row in reversed(rows[-maximum_rows:]):
-        item = compact(row, maximum=min(2200, max(700, maximum_chars // 2)))
+        data = row.get("data") if isinstance(row, dict) else None
+        risk_summary = data.get("risk_summary") if isinstance(data, dict) else None
+        item_budget = (
+            min(4800, maximum_chars)
+            if isinstance(risk_summary, dict)
+            else min(2200, max(700, maximum_chars // 2))
+        )
+        item = compact(row, maximum=item_budget)
         candidate = [item, *selected]
         if len(json.dumps(candidate, ensure_ascii=False, default=str)) > maximum_chars:
             continue
@@ -475,9 +525,40 @@ class AgentRuntime:
             "artifacts": s["artifacts"],
             "remaining_budget": {key: s["budget"][key] - s["turn_usage"].get(key, 0) for key in s["budget"]},
             "feedback": s.get("feedback", ""),
+            "inventory_risk_fast_path": s.get("inventory_risk_fast_path"),
             "tools": catalog(include_schema=phase == "execute"),
             "constraint_version": s["constraint_version"],
         }
+
+    @staticmethod
+    def _inventory_fast_path_allowed(task):
+        goal = task.goal.lower()
+        asks_complete_list = any(token in goal for token in ("全部", "全量", "所有", "完整清单", "导出"))
+        inventory_intent = any(token in goal for token in ("缺货", "补货", "库存风险"))
+        return inventory_intent and not asks_complete_list
+
+    def _activate_inventory_fast_path(self, task, state, observations):
+        if not self._inventory_fast_path_allowed(task):
+            return False
+        for observation in reversed(observations):
+            if observation.get("status") != "success" or observation.get("tool") != "query_inventory":
+                continue
+            summary = observation.get("data", {}).get("risk_summary")
+            if not isinstance(summary, dict):
+                continue
+            state["inventory_risk_fast_path"] = {
+                "evidence_id": observation["evidence_id"],
+                "risk_positions": summary.get("risk_positions"),
+                "shown_positions": summary.get("shown_positions"),
+                "horizon_end": summary.get("horizon_end"),
+            }
+            state["phase"] = "evaluate"
+            state["feedback"] = (
+                "库存风险摘要已按全量仓位计算并含需求、可靠在途、交期、MOQ 与建议量。"
+                "当前用户未要求完整导出清单，直接基于该证据完成优先级建议，不再扩展查询、分页或重规划。"
+            )
+            return True
+        return False
 
     async def reserve(self, task, kind):
         state = copy.deepcopy(task.state)
@@ -1313,12 +1394,13 @@ class AgentRuntime:
                 observations.append(observation)
                 evidences.append(evidence)
             state["pending"] = None
-            state["phase"] = "execute"
-            state["feedback"] = (
-                ""
-                if all(row["status"] == "success" for row in observations)
-                else "批量工具存在失败或空结果，请根据观察修正行动。"
-            )
+            if not self._activate_inventory_fast_path(task, state, observations):
+                state["phase"] = "execute"
+                state["feedback"] = (
+                    ""
+                    if all(row["status"] == "success" for row in observations)
+                    else "批量工具存在失败或空结果，请根据观察修正行动。"
+                )
             await self.commit(
                 task,
                 state,
@@ -1362,8 +1444,9 @@ class AgentRuntime:
                 state, task, call, fingerprint, status, error, result
             )
             state["pending"] = None
-            state["phase"] = "execute"
-            state["feedback"] = "" if status == "success" else f"工具返回 {status}，请根据观察修正行动。"
+            if not self._activate_inventory_fast_path(task, state, [observation]):
+                state["phase"] = "execute"
+                state["feedback"] = "" if status == "success" else f"工具返回 {status}，请根据观察修正行动。"
             await self.commit(task, state, "tool_result", observation, evidence=evidence, session=session)
         return True
 

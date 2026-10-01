@@ -38,6 +38,7 @@ replan 表示需要调整剩余计划；ask_user 表示缺少无法自行获取�
 不要把简单单工具查询委派出去；子 Agent 不能保存成果、修改记忆、追问用户或跨任务召回历史。
 save_artifact 与 propose_memory 会写入数据，只能使用单个 tool 动作，不能放入 tools。
 工具参数严格遵守目录 Schema。观察可能被截断，需要完整数据时调用 read_evidence。
+当用户要求未来补货或缺货风险时，query_inventory 的 risk_summary 已按全量仓位计算未来窗口缺口、建议补货量、交期和 MOQ。优先基于该摘要交付；除非用户明确要求完整 SKU 清单或摘要字段缺失，不得为逐页读取库存原表而反复调用 read_evidence。
 save_artifact 可保存真实报告/文案/CSV；报告应包含证据、口径和缺口，不只说已完成。
 引用格式 [证据](evidence:ev_...)，成果可用 [成果](artifact:ar_...)。
 step_done 的 evidence_ids 只能使用实际成功工具返回的证据。别将工具报错当作完成。""",
@@ -48,6 +49,7 @@ step_done 的 evidence_ids 只能使用实际成功工具返回的证据。别�
 finish/stop 的 evidence_ids 与每条 finding.evidence_ids 只能从 subtask_available_evidence_ids 原样复制；该列表为空时不得编造 ID，应返回 stop 并在 limitations 说明原因。
 shared_scope 只用于确定可查数据窗口和指标口径，不得将其转写为本子任务的 evidence_ids。结论只能引用本子任务的 subtask_available_evidence_ids。""",
     "evaluate": """根据当前计划、已完成步骤和工具观察检查总目标。
+若 inventory_risk_fast_path 存在，说明 query_inventory 已基于全量仓位生成两周缺货风险摘要。当前用户未要求完整导出清单时，必须直接返回 finish：用该摘要中的最高优先级 SKU 给出补货建议，并如实说明 risk_positions 与 shown_positions；不得 continue、replan、ask_user 或发起补充查询。
 continue 继续已有待执行步骤；replan 修改计划；ask_user 请求关键补充；
 finish 仅用于所有成功标准满足且成果真实存在；stop 用于无法继续并交付部分成果。
 finish 必须逐项给出 assessments，关联真实证据/成果 ID，并给出完整最终 answer。

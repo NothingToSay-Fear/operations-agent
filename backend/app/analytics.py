@@ -3,6 +3,7 @@
 from collections import defaultdict
 from datetime import date, timedelta
 from decimal import Decimal
+from math import ceil
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -73,6 +74,79 @@ class InventoryQuery(StrictModel):
     demand_days: int = Field(default=14, ge=1, le=90)
     limit: int = Field(default=30, ge=1, le=100)
     include_movements: bool = False
+
+
+def inventory_risk_summary(rows: list[dict], as_of: date, demand_days: int, maximum_rows: int = 10) -> dict:
+    """将全量库存仓位转换为可直接用于补货判断的受控风险摘要。"""
+    horizon_end = as_of + timedelta(days=demand_days)
+    risks = []
+    for row in rows:
+        daily = Decimal(str(row["observed_daily_units"]))
+        if daily <= 0:
+            continue
+        demand_units = daily * demand_days
+        arrivals = row["in_transit"]
+        reliable_transit = sum(
+            item["quantity"]
+            for item in arrivals
+            if not item["overdue"] and date.fromisoformat(item["expected_date"]) <= horizon_end
+        )
+        overdue_transit = sum(item["quantity"] for item in arrivals if item["overdue"])
+        supply_units = Decimal(str(row["available"] + reliable_transit))
+        shortage_units = max(Decimal(0), demand_units - supply_units)
+        if shortage_units <= 0:
+            continue
+        moq = int(row["minimum_order"])
+        suggested_order = ceil(float(shortage_units) / moq) * moq
+        coverage = row["coverage_days"]
+        stockout_before_lead = coverage is not None and Decimal(str(coverage)) < Decimal(str(row["lead_days"]))
+        risks.append(
+            {
+                "product_id": row["product_id"],
+                "name": row["name"],
+                "warehouse": row["warehouse"],
+                "available": row["available"],
+                "observed_daily_units": row["observed_daily_units"],
+                "coverage_days": coverage,
+                "lead_days": row["lead_days"],
+                "minimum_order": moq,
+                "demand_units_next_window": round(float(demand_units), 3),
+                "reliable_in_transit_units": reliable_transit,
+                "overdue_in_transit_units": overdue_transit,
+                "supply_units_next_window": round(float(supply_units), 3),
+                "shortage_units": round(float(shortage_units), 3),
+                "suggested_order_units": suggested_order,
+                "stockout_before_lead": stockout_before_lead,
+                "expected_arrivals": [
+                    {
+                        "quantity": item["quantity"],
+                        "expected_date": item["expected_date"],
+                        "overdue": item["overdue"],
+                    }
+                    for item in arrivals
+                ],
+            }
+        )
+    risks.sort(
+        key=lambda item: (
+            not item["stockout_before_lead"],
+            item["coverage_days"] if item["coverage_days"] is not None else float("inf"),
+            -item["shortage_units"],
+            item["product_id"],
+        )
+    )
+    return {
+        "as_of": str(as_of),
+        "horizon_end": str(horizon_end),
+        "demand_days": demand_days,
+        "demand_assumption": "未来需求按截止日前 demand_days 天的已支付销量日均值外推。",
+        "supply_assumption": "供给=当前可用库存+窗口内预计到货且未逾期的在途；逾期在途单独列示，不计入可靠供给。",
+        "order_assumption": "建议补货量按窗口缺口向上取整到最小订货量的整数倍。",
+        "risk_positions": len(risks),
+        "shown_positions": min(len(risks), maximum_rows),
+        "truncated": len(risks) > maximum_rows,
+        "rows": risks[:maximum_rows],
+    }
 
 
 METRICS = {
@@ -433,6 +507,7 @@ async def query_inventory(session, q: InventoryQuery):
         ]
     return dict(
         rows=result[: q.limit],
+        risk_summary=inventory_risk_summary(result, as_of, q.demand_days),
         movements=movements,
         movements_limit=100,
         total_positions=len(result),

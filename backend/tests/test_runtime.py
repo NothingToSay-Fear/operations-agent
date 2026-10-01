@@ -232,6 +232,54 @@ async def test_long_evidence_pages_are_readable_without_repeated_truncation(data
         assert collected == rows
 
 
+def test_inventory_risk_observation_keeps_summary_before_raw_rows():
+    from app.agent.runtime import compact
+
+    value = {
+        "as_of": "2026-09-28",
+        "demand_days": 14,
+        "total_positions": 200,
+        "rows": [{"description": "原始库存行" * 500}],
+        "risk_summary": {
+            "risk_positions": 12,
+            "shown_positions": 2,
+            "truncated": True,
+            "rows": [
+                {"product_id": "SKU-0001", "suggested_order_units": 100},
+                {"product_id": "SKU-0002", "suggested_order_units": 200},
+            ],
+        },
+    }
+    observed = compact(value, maximum=700)
+    assert observed["risk_summary"]["rows"]
+    assert "rows" not in observed
+    assert observed["total_positions"] == 200
+
+
+def test_inventory_risk_fast_path_skips_extra_exploration():
+    runtime = AgentRuntime(None, None)
+
+    class InventoryTask:
+        goal = "找出未来两周有缺货风险的SKU并给出补货建议"
+
+    state = {"phase": "execute"}
+    observation = {
+        "evidence_id": "ev_inventory",
+        "tool": "query_inventory",
+        "status": "success",
+        "data": {
+            "risk_summary": {
+                "risk_positions": 12,
+                "shown_positions": 8,
+                "horizon_end": "2026-10-12",
+            }
+        },
+    }
+    assert runtime._activate_inventory_fast_path(InventoryTask(), state, [observation])
+    assert state["phase"] == "evaluate"
+    assert state["inventory_risk_fast_path"]["evidence_id"] == "ev_inventory"
+
+
 async def test_step_budget_routes_to_replan_and_preserves_global_budget(database, settings):
     settings = settings.model_copy(update={"max_step_tools": 1})
     tid = await new_task(database, settings)

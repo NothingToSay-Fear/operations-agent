@@ -118,6 +118,15 @@ async def test_queries_cutoff_and_inventory(database):
             await query_metrics(session, Query(start_date=date(2026, 9, 1), end_date=date(2026, 10, 1)))
         inventory = await query_inventory(session, InventoryQuery(as_of=date(2026, 9, 14)))
         assert all(r["available"] == r["physical"] - r["reserved"] >= 0 for r in inventory["rows"])
+        summary = inventory["risk_summary"]
+        assert summary["as_of"] == "2026-09-14"
+        assert summary["horizon_end"] == "2026-09-28"
+        assert summary["risk_positions"] >= summary["shown_positions"]
+        assert all(row["shortage_units"] > 0 for row in summary["rows"])
+        assert all(
+            row["suggested_order_units"] % row["minimum_order"] == 0
+            for row in summary["rows"]
+        )
         assert "arrived_date" not in json.dumps(inventory)
         facts = await query_order_facts(
             session, Query(start_date=date(2026, 9, 1), end_date=date(2026, 9, 10), as_of=date(2026, 9, 10))
