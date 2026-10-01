@@ -141,14 +141,6 @@ class MarketingDay(CommerceBase):
     spend_cents = Column(Integer, nullable=False)
 
 
-class ReferenceDocument(CommerceBase):
-    __tablename__ = "reference_documents"
-    id = Column(String(32), primary_key=True)
-    title = Column(String(160), nullable=False)
-    effective_date = Column(Date, nullable=False)
-    content = Column(Text, nullable=False)
-
-
 class Shipment(CommerceBase):
     __tablename__ = "shipments"
     id = Column(String(50), primary_key=True)

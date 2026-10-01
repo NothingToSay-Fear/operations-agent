@@ -21,7 +21,7 @@ from app.extension_models import (
     SourceSetting,
     UserMemory,
 )
-from app.models import Chunk, Document, Task
+from app.models import Document, Task
 
 
 class SourceEdit(StrictModel):
@@ -250,7 +250,6 @@ def router(database, settings):
             )
             await session.execute(delete(KnowledgeSegment).where(KnowledgeSegment.version_id.in_(versions)))
             await session.execute(delete(DocumentVersion).where(DocumentVersion.document_id == doc_id))
-            await session.execute(delete(Chunk).where(Chunk.document_id == doc_id))
             doc.content = ""
             return {"ok": True}
 

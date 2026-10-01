@@ -32,7 +32,7 @@ async def test_retrieval_filters_owner_and_selection_before_scoring(database, se
             ].content
 
 
-async def test_commerce_reference_documents_are_not_hidden_knowledge_sources(database, settings):
+async def test_unregistered_simulated_references_are_not_knowledge_sources(database, settings):
     async with database.sessions() as session, database.read_sessions() as commerce:
         result = await knowledge.search(session, commerce, "test-user", "秋日回馈 CAM-02", settings)
         assert result["rows"] == []

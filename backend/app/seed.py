@@ -23,7 +23,6 @@ from app.commerce_models import (
     PriceHistory,
     Product,
     Purchase,
-    ReferenceDocument,
     Refund,
     Shipment,
     RawImport,
@@ -390,29 +389,6 @@ def generate(
                     spend_cents=clicks * rng.randint(90, 180) if channel in {"付费搜索", "联盟推广"} else 0,
                 )
             )
-    tables[ReferenceDocument] = [
-        dict(
-            id="DOC-BRAND",
-            title="品牌文案规范 v1",
-            effective_date=start,
-            content="品牌语气：清晰、克制、实用。标题包含品类与已确认属性。禁止虚构材质、认证、销量、功效；不使用最强、第一、绝对有效等表述。商品规格以商品记录为准。",
-        ),
-        dict(
-            id="DOC-REFUND",
-            title="售后与库存口径",
-            effective_date=start,
-            content="退款到账按到账日计算。退款不代表退货入库，只有验收入库后增加实物库存。期间退款额可能来自此前成交订单，不能直接当作同期订单退款率。",
-        ),
-        *[
-            dict(
-                id=f"DOC-{c['id']}",
-                title=c["name"] + "规则",
-                effective_date=c["start_date"],
-                content=f"活动 {c['id']}，{c['start_date']} 至 {c['end_date']}，折扣 {c['discount_percent']}%。{c['rule']} 参与SKU：{', '.join(c['product_ids'])}",
-            )
-            for c in campaigns
-        ],
-    ]
     # 模拟源数据重试导入，规范事实按源业务键去重。
     canonical_orders = {}
     for order in tables[Order]:

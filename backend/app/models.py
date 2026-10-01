@@ -1,7 +1,6 @@
 import time
 import uuid
 
-from pgvector.sqlalchemy import Vector
 from sqlalchemy import JSON, Column, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase
 
@@ -96,15 +95,6 @@ class Document(Base):
     enabled = Column(Integer, nullable=False, default=1)
     version = Column(Integer, nullable=False, default=1)
     created_at = Column(Float, default=time.time, nullable=False)
-
-
-class Chunk(Base):
-    __tablename__ = "chunks"
-    id = Column(String(32), primary_key=True, default=uid)
-    document_id = Column(ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
-    position = Column(Integer, nullable=False)
-    text = Column(Text, nullable=False)
-    embedding = Column(JSON().with_variant(Vector(), "postgresql"), nullable=True)
 
 
 # 扩展表复用同一份元数据，兼容既有数据库的增量迁移。
