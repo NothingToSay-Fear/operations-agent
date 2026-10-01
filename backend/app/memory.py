@@ -423,7 +423,6 @@ async def build_context(session, task, settings):
         "memory_summary_version": short_term.version,
         "memory_state_revision": short_term.revision,
         "recent_turns": selected_turns,
-        "messages": selected_turns,
         "observations": observations,
         "history_scope": "current_task_only",
         "context_manifest": {
@@ -437,5 +436,44 @@ async def build_context(session, task, settings):
             "evidence_ids": evidence_ids,
             "history_unit_ids": history_unit_ids,
             "history_scope": "current_task_only",
+        },
+    }
+
+
+async def build_subtask_context(session, task, subtask, settings):
+    """为临时子 Agent 构造最小上下文，不复制主 Agent 的计划和全部观察。"""
+    built = await build_context(session, task, settings)
+    context = {
+        "goal": task.goal,
+        "current_instruction": built["current_instruction"],
+        "effective_constraints": built["effective_constraints"],
+        "task_memory": built["task_memory"],
+        "long_term_memories": built["long_term_memories"][:3],
+        "recent_turns": built["recent_turns"][-2:],
+        "history_scope": "current_task_only",
+        "subtask": {
+            "id": subtask["id"],
+            "role": subtask["role"],
+            "objective": subtask["objective"],
+            "done_when": subtask["done_when"],
+            "allowed_tools": subtask["allowed_tools"],
+            "remaining_budget": subtask["budget"],
+        },
+    }
+    if len(json.dumps(context, ensure_ascii=False)) > settings.subtask_context_char_budget:
+        # 约束与当前指令不可截断；压缩的是可替代的历史背景。
+        context["task_memory"] = {}
+        context["long_term_memories"] = context["long_term_memories"][:1]
+        context["recent_turns"] = context["recent_turns"][-1:]
+    if len(json.dumps(context, ensure_ascii=False)) > settings.subtask_context_char_budget:
+        raise ValueError("子任务的明确约束超出上下文上限，请缩小当前任务范围")
+    return {
+        **context,
+        "scope_revision": built["scope_revision"],
+        "context_manifest": {
+            **built["context_manifest"],
+            "subtask_id": subtask["id"],
+            "subtask_role": subtask["role"],
+            "subtask_context": "isolated",
         },
     }

@@ -3,7 +3,17 @@ import copy
 import pytest
 from sqlalchemy import func, select, update
 
-from app.agent.contracts import Action, Assessment, Criterion, Decision, Plan, Step, ToolCall
+from app.agent.contracts import (
+    Action,
+    Assessment,
+    Criterion,
+    Decision,
+    Plan,
+    Step,
+    SubtaskFinding,
+    SubtaskSpec,
+    ToolCall,
+)
 from app.agent.runtime import AgentRuntime, LeaseLost, initial_state
 from app.agent.tools import calculate
 from app.models import Artifact, Evidence, Task, TaskEvent
@@ -398,6 +408,181 @@ async def test_explicit_graph_batches_read_tools_and_skips_intermediate_evaluati
         assert task.state["usage"]["tool_calls"] == 2
         assert await session.scalar(select(func.count()).select_from(Evidence)) == 2
     assert phases == ["plan", "execute", "execute", "execute", "evaluate"]
+
+
+async def test_main_agent_delegates_isolated_subtasks_and_counts_shared_budget(database, settings):
+    """子 Agent 并行执行局部调查，主 Agent 只接收其结构化发现和证据。"""
+    import asyncio
+
+    from app.agent.contracts import SubtaskDecision
+
+    started = 0
+    both_started = asyncio.Event()
+    subtask_contexts = []
+
+    class DelegatingModel:
+        async def decide(self, phase, context):
+            nonlocal started
+            if phase == "plan":
+                return Plan(
+                    summary="并行核对渠道和商品基础信息",
+                    criteria=[Criterion(id="c1", description="取得两类可追溯证据")],
+                    steps=[Step(id="collect", objective="取得分析依据", done_when="证据齐全")],
+                    change_reason="初始计划",
+                ), {}
+            if phase == "subtask":
+                subtask_contexts.append(context)
+                assert "plan" not in context and "subtask_results" not in context
+                assert context["history_scope"] == "current_task_only"
+                started += 1
+                if started == 2:
+                    both_started.set()
+                await asyncio.wait_for(both_started.wait(), 1)
+                refs = [row["evidence_id"] for row in context["observations"]]
+                if not refs:
+                    tool = (
+                        "inspect_data_capabilities"
+                        if context["subtask"]["id"] == "channel"
+                        else "get_metric_definitions"
+                    )
+                    return SubtaskDecision(kind="tool", tool=tool, summary="取得专项证据"), {
+                        "input_tokens": 10,
+                        "output_tokens": 5,
+                    }
+                return SubtaskDecision(
+                    kind="finish",
+                    summary="专项核对完成",
+                    findings=[SubtaskFinding(statement="已取得专项依据", evidence_ids=refs)],
+                    evidence_ids=refs,
+                ), {"input_tokens": 10, "output_tokens": 5}
+            if phase == "execute":
+                refs = [row["evidence_id"] for row in context["observations"]]
+                if not context["subtask_results"]:
+                    return Action(
+                        kind="delegate",
+                        summary="并行委派渠道和商品基础核对",
+                        subtasks=[
+                            SubtaskSpec(
+                                id="channel",
+                                role="channel",
+                                objective="确认数据能力",
+                                done_when="取得数据范围证据",
+                                allowed_tools=["inspect_data_capabilities"],
+                                max_model_calls=2,
+                                max_tool_calls=1,
+                            ),
+                            SubtaskSpec(
+                                id="product",
+                                role="product_inventory",
+                                objective="确认指标口径",
+                                done_when="取得指标定义证据",
+                                allowed_tools=["get_metric_definitions"],
+                                max_model_calls=2,
+                                max_tool_calls=1,
+                            ),
+                        ],
+                    ), {}
+                return Action(kind="step_done", summary="主 Agent 已核对专项结果", evidence_ids=refs), {}
+            refs = [row["evidence_id"] for row in context["observations"]]
+            return Decision(
+                kind="finish",
+                reason="全部证据已取得",
+                answer="模拟数据分析已完成。",
+                assessments=[
+                    Assessment(criterion_id="c1", satisfied=True, evidence_ids=refs, note="专项证据齐全")
+                ],
+            ), {}
+
+    tid = await new_task(database, settings)
+    await AgentRuntime(database, settings, DelegatingModel()).run(tid)
+    async with database.sessions() as session:
+        task = await session.get(Task, tid)
+        assert task.status == "completed", task.state
+        assert task.state["usage"]["model_calls"] == 8
+        assert task.state["turn_usage"]["model_calls"] == 8
+        assert task.state["usage"]["tool_calls"] == 2
+        assert {item["status"] for item in task.state["subtasks"].values()} == {"succeeded"}
+        assert all(item["evidence_ids"] for item in task.state["subtasks"].values())
+    assert len(subtask_contexts) == 4
+
+
+async def test_explicit_channel_and_product_request_is_dispatched_after_scope(database, settings):
+    """用户明确要求两个独立分析维度时，运行时应稳定创建隔离子任务。"""
+    goal = "\u5206\u6790\u6570\u636e\u622a\u6b62\u65e5\u671f\u4e4b\u524d\u4e03\u5929\u7684GMV\uff0c\u7ed3\u5408\u6e20\u9053\u548c\u5546\u54c1\u6570\u636e\u7ed9\u51fa\u6709\u8bc1\u636e\u7684\u8fd0\u8425\u5efa\u8bae\u3002"
+    state = initial_state(goal, settings)
+    state.update(
+        phase="execute",
+        plan=Plan(
+            summary="先确认范围，再拆分渠道和商品贡献。",
+            criteria=[Criterion(id="c1", description="给出有证据的建议")],
+            steps=[Step(id="analysis", objective="分析渠道和商品贡献", done_when="证据充分")],
+            change_reason="initial",
+        ).model_dump(),
+        steps={"analysis": {"status": "pending"}},
+        observations=[
+            {
+                "tool": "inspect_data_capabilities",
+                "status": "success",
+                "evidence_id": "ev_scope",
+                "constraint_version": 1,
+                "result": {"data": {"as_of": "2026-09-28"}},
+            }
+        ],
+    )
+    async with database.sessions() as session:
+        task = Task(user_id="test-user", goal=goal, state=state)
+        session.add(task)
+        await session.commit()
+        tid = task.id
+    runtime = AgentRuntime(database, settings, ProtocolModel())
+    assert await runtime.claim(tid)
+    task = await runtime.load(tid)
+    assert await runtime.dispatch_explicit_multidomain_work(task)
+    async with database.sessions() as session:
+        task = await session.get(Task, tid)
+        assert task.state["phase"] == "subtasks"
+        assert {row["role"] for row in task.state["subtasks"].values()} == {"channel", "product_inventory"}
+        assert all(row["parent_step_id"] == "analysis" for row in task.state["subtasks"].values())
+        assert not await runtime.dispatch_explicit_multidomain_work(task)
+
+
+def test_subtask_finish_context_exposes_only_local_evidence(database, settings):
+    """?????????????????????????????"""
+    runtime = AgentRuntime(database, settings, ProtocolModel())
+    subtask = {
+        "id": "channel",
+        "allowed_tools": ["compare_metrics"],
+        "usage": {"model_calls": 3, "tool_calls": 3},
+        "budget": {"model_calls": 4, "tool_calls": 3},
+        "observations": [
+            {"status": "success", "evidence_id": "ev_local"},
+            {"status": "failed", "evidence_id": "ev_failed"},
+        ],
+    }
+    context = runtime._subtask_context({"goal": "test"}, subtask)
+    assert context["finish_only"] is True
+    assert context["tools"] == []
+    assert context["subtask_available_evidence_ids"] == ["ev_local"]
+    scope = runtime._subtask_scope_capsule(
+        {
+            "constraint_version": 1,
+            "observations": [
+                {
+                    "tool": "inspect_data_capabilities",
+                    "status": "success",
+                    "constraint_version": 1,
+                    "data": {"as_of": "2026-09-28"},
+                },
+                {
+                    "tool": "query_metrics",
+                    "status": "success",
+                    "constraint_version": 1,
+                    "data": {"value": 1},
+                },
+            ],
+        }
+    )
+    assert scope == [{"tool": "inspect_data_capabilities", "result": {"as_of": "2026-09-28"}}]
 
 
 async def test_only_one_worker_can_claim_task(database, settings):

@@ -12,15 +12,30 @@ from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy import select, update
 
-from app.agent.contracts import Action, Decision, Plan
+from app.agent.contracts import Action, Decision, Plan, SubtaskDecision, SubtaskSpec
 from app.agent.model import ModelGateway, ModelUnavailable, PROMPT_VERSION, model_failure
-from app.agent.tools import catalog, invoke, supports_parallel
+from app.agent.tools import REGISTRY, catalog, invoke, supports_parallel
 from app import access, auxiliary, memory, task_context
 from app.extension_models import MemoryEvent
 from app.models import Evidence, Run, Task, TaskEvent, uid
 
 logger = logging.getLogger(__name__)
 TERMINAL = {"completed", "partial", "blocked", "failed", "cancelled"}
+SUBTASK_TOOLS = {
+    "inspect_data_capabilities",
+    "get_metric_definitions",
+    "query_metrics",
+    "compare_metrics",
+    "get_products",
+    "query_order_facts",
+    "query_inventory",
+    "query_marketing",
+    "search_knowledge",
+    "read_document",
+    "read_evidence",
+    "calculate",
+    "search_metric_definitions",
+}
 
 
 def initial_state(goal, settings):
@@ -61,6 +76,7 @@ def initial_state(goal, settings):
         invalid_outputs=0,
         step_tools={},
         fingerprints={},
+        subtasks={},
         constraint_version=1,
     )
 
@@ -79,6 +95,20 @@ def compact(value, maximum=4500):
         "source_refs": references,
         "instruction": "需要完整内容可调用 read_evidence",
     }
+
+
+def compact_observations(rows, *, maximum_rows, maximum_chars):
+    """按最近优先保留可审计观测，避免工具原始结果挤占主 Agent 上下文。"""
+    selected = []
+    for row in reversed(rows[-maximum_rows:]):
+        item = compact(row, maximum=min(2200, max(700, maximum_chars // 2)))
+        candidate = [item, *selected]
+        if len(json.dumps(candidate, ensure_ascii=False, default=str)) > maximum_chars:
+            continue
+        selected = candidate
+    if not selected and rows:
+        selected = [compact(rows[-1], maximum=max(400, maximum_chars - 100))]
+    return selected
 
 
 class LeaseLost(Exception):
@@ -105,14 +135,22 @@ class AgentRuntime:
         builder.add_node("plan", self._plan_node)
         builder.add_node("execute", self._execute_node)
         builder.add_node("tools", self._tools_node)
+        builder.add_node("subtasks", self._subtasks_node)
         builder.add_node("evaluate", self._evaluate_node)
         builder.add_edge(START, "guard")
         builder.add_conditional_edges(
             "guard",
             lambda state: state["route"],
-            {"plan": "plan", "execute": "execute", "tool": "tools", "evaluate": "evaluate", "end": END},
+            {
+                "plan": "plan",
+                "execute": "execute",
+                "tool": "tools",
+                "subtasks": "subtasks",
+                "evaluate": "evaluate",
+                "end": END,
+            },
         )
-        for node in ("plan", "execute", "tools", "evaluate"):
+        for node in ("plan", "execute", "tools", "subtasks", "evaluate"):
             builder.add_edge(node, "guard")
         # 数据库状态是唯一持久化检查点，不另建一份可能冲突的运行状态。
         self.graph = builder.compile()
@@ -362,6 +400,7 @@ class AgentRuntime:
                 plan=None,
                 steps={},
                 step_tools={},
+                subtasks={},
                 answer="",
                 feedback="资料权限、版本或长期记忆已变化，请重新核对当前约束和证据。",
                 finalizing=False,
@@ -388,6 +427,10 @@ class AgentRuntime:
         await self.execute_tool(await self.load(graph_state["task_id"]))
         return graph_state
 
+    async def _subtasks_node(self, graph_state):
+        await self.execute_subtasks(await self.load(graph_state["task_id"]))
+        return graph_state
+
     async def _evaluate_node(self, graph_state):
         await self.decide(await self.load(graph_state["task_id"]), "evaluate")
         return graph_state
@@ -404,17 +447,35 @@ class AgentRuntime:
 
     def context(self, task):
         s = task.state
+        phase = s["phase"]
+        summaries = [
+            {
+                "id": item["id"],
+                "role": item["role"],
+                "objective": item["objective"],
+                "status": item["status"],
+                "findings": item.get("findings", []),
+                "limitations": item.get("limitations", []),
+                "evidence_ids": item.get("evidence_ids", []),
+            }
+            for item in s.get("subtasks", {}).values()
+            if item.get("constraint_version") == s["constraint_version"]
+        ]
         return {
             "goal": task.goal,
-            "messages": [],
             "plan": s["plan"],
             "step_results": s["steps"],
             "current_step": self.current_step(s),
-            "observations": s["observations"][-20:],
+            "observations": compact_observations(
+                s["observations"],
+                maximum_rows=self.settings.main_context_observation_limit,
+                maximum_chars=self.settings.main_context_observation_char_budget,
+            ),
+            "subtask_results": summaries,
             "artifacts": s["artifacts"],
             "remaining_budget": {key: s["budget"][key] - s["turn_usage"].get(key, 0) for key in s["budget"]},
             "feedback": s.get("feedback", ""),
-            "tools": catalog(),
+            "tools": catalog(include_schema=phase == "execute"),
             "constraint_version": s["constraint_version"],
         }
 
@@ -454,6 +515,42 @@ class AgentRuntime:
         )
         return await self.load(task.id)
 
+    async def reserve_many(self, task, kind, count, *, phase, subtask_ids):
+        """为并发子 Agent 波次一次性预留共享预算，避免并发提交相互覆盖。"""
+        if count < 1:
+            return task
+        state = copy.deepcopy(task.state)
+        now = time.time()
+        if state.get("active_started_at"):
+            elapsed = min(now - state["active_started_at"], self.settings.lease_seconds)
+            state["usage"]["active_seconds"] += elapsed
+            state["turn_usage"]["active_seconds"] += elapsed
+        state["active_started_at"] = now
+        budget = state["budget"]
+        if (
+            state["turn_usage"].get(kind, 0) + count > budget[kind]
+            or state["turn_usage"]["active_seconds"] >= budget["active_seconds"]
+        ):
+            state["answer"] = "已达到本轮执行预算。已保存现有证据和成果，未完成的工作保留在计划中。"
+            state.pop("active_started_at", None)
+            await self.commit(task, state, "budget_exhausted", {"message": state["answer"]}, status="partial")
+            return None
+        state["usage"][kind] += count
+        state["turn_usage"][kind] += count
+        await self.commit(
+            task,
+            state,
+            "model_started" if kind == "model_calls" else "tool_started",
+            {
+                "phase": phase,
+                "count": count,
+                "call": state["turn_usage"][kind],
+                "turn": state["turn_number"],
+                "subtask_ids": subtask_ids,
+            },
+        )
+        return await self.load(task.id)
+
     def account(self, state, usage=None):
         elapsed = max(0, time.time() - state.pop("active_started_at", time.time()))
         state["usage"]["active_seconds"] += elapsed
@@ -471,7 +568,12 @@ class AgentRuntime:
         state = task.state
         remaining = state["budget"]["model_calls"] - state["turn_usage"]["model_calls"]
         tools_exhausted = state["turn_usage"]["tool_calls"] >= state["budget"]["tool_calls"]
-        if state["observations"] and not state.get("finalizing") and (0 < remaining <= 2 or tools_exhausted):
+        if (
+            state["phase"] != "subtasks"
+            and state["observations"]
+            and not state.get("finalizing")
+            and (0 < remaining <= 2 or tools_exhausted)
+        ):
             state = copy.deepcopy(state)
             state.update(
                 phase="evaluate",
@@ -486,6 +588,10 @@ class AgentRuntime:
             state["phase"] = "evaluate"
             await self.commit(task, state, "evaluating", {"message": "正在检查任务完成条件"})
             return True
+        if state["phase"] == "execute":
+            dispatched = await self.dispatch_explicit_multidomain_work(task)
+            if dispatched:
+                return True
         return True
 
     async def advance(self, task):
@@ -509,23 +615,42 @@ class AgentRuntime:
         try:
             async with self.db.sessions() as session:
                 built = await memory.build_context(session, task, self.settings)
+                model_observations = compact_observations(
+                    built.get("observations", []),
+                    maximum_rows=self.settings.main_context_observation_limit,
+                    maximum_chars=self.settings.main_context_observation_char_budget,
+                )
+                context = {
+                    **self.context(task),
+                    **{
+                        key: value
+                        for key, value in built.items()
+                        if key not in {"context_manifest", "observations"}
+                    },
+                    "observations": model_observations,
+                }
                 snapshot = await task_context.persist_context_snapshot(
                     session,
                     task,
                     state["usage"]["model_calls"],
                     phase,
-                    built["context_manifest"],
+                    {
+                        **built["context_manifest"],
+                        "context_chars": len(json.dumps(context, ensure_ascii=False, default=str)),
+                        "tool_count": len(context.get("tools", [])),
+                        "observation_count": len(context.get("observations", [])),
+                    },
                 )
                 await session.commit()
             state["last_context_snapshot_id"] = snapshot.id
             built.pop("context_manifest", None)
             task._scope_revision = built["scope_revision"]
             state["context_scope_revision"] = built["scope_revision"]
+            state["effective_constraints"] = built["effective_constraints"]
             state["used_memories"] = [
                 {"id": m["id"], "version": m["version"], "reason": m["reason"]}
                 for m in built["long_term_memories"]
             ]
-            context = {**self.context(task), **built}
             remaining_seconds = state["budget"]["active_seconds"] - state["turn_usage"]["active_seconds"]
             decision, usage = await asyncio.wait_for(
                 self.model.decide(phase, context),
@@ -624,6 +749,94 @@ class AgentRuntime:
         if not set(ids) <= allowed:
             raise ValueError("引用必须属于当前约束版本的成功证据，不能引用过期或失败观察")
 
+    def queue_subtasks(self, state, step, specs):
+        """校验并持久化子任务；模型分派和规则分派共用同一条安全边界。"""
+        if not specs or len(specs) > self.settings.max_subtasks:
+            raise ValueError("子任务数量不符合当前配置上限")
+        remaining_tools = state["budget"]["tool_calls"] - state["turn_usage"]["tool_calls"]
+        allocated_tools = sum(item.max_tool_calls for item in specs)
+        used = state["step_tools"].get(step["id"], 0)
+        if used + allocated_tools > self.settings.max_step_tools or allocated_tools > remaining_tools:
+            raise ValueError("子任务工具预算超过当前步骤或任务限制")
+        existing = state.setdefault("subtasks", {})
+        for spec in specs:
+            if spec.id in existing and existing[spec.id].get("status") not in {"failed", "partial"}:
+                raise ValueError("子任务 ID 已存在，请使用新的 ID 或直接使用既有结果")
+            if (
+                not set(spec.allowed_tools) <= SUBTASK_TOOLS
+                or not set(spec.allowed_tools) <= set(REGISTRY)
+                or any(not supports_parallel(name) for name in spec.allowed_tools)
+            ):
+                raise ValueError("子任务只能使用已登记的只读工具")
+            if spec.max_model_calls > self.settings.subtask_max_model_calls:
+                raise ValueError("子任务模型调用预算超过系统限制")
+            if spec.max_tool_calls > self.settings.subtask_max_tool_calls:
+                raise ValueError("子任务工具调用预算超过系统限制")
+            existing[spec.id] = {
+                **spec.model_dump(),
+                "parent_step_id": step["id"],
+                "status": "queued",
+                "observations": [],
+                "evidence_ids": [],
+                "findings": [],
+                "limitations": [],
+                "usage": {"model_calls": 0, "tool_calls": 0, "input_tokens": 0, "output_tokens": 0},
+                "budget": {"model_calls": spec.max_model_calls, "tool_calls": spec.max_tool_calls},
+                "constraint_version": state["constraint_version"],
+                "created_at": time.time(),
+            }
+        state["phase"] = "subtasks"
+
+    async def dispatch_explicit_multidomain_work(self, task):
+        """对用户明确点名的独立维度强制分派，避免依赖模型是否主动输出 delegate。"""
+        state = copy.deepcopy(task.state)
+        step = self.current_step(state)
+        dispatched_versions = set(state.get("auto_delegated_constraint_versions", []))
+        if step is None or state["constraint_version"] in dispatched_versions:
+            return False
+        # 先完成数据口径确认，子 Agent 才能直接在同一数据边界内调查。
+        if not any(row.get("tool") == "inspect_data_capabilities" for row in state["observations"]):
+            return False
+        async with self.db.sessions() as session:
+            constraints, _ = await task_context.ensure_task_context(session, task, self.settings)
+            dimensions = set((constraints.state.get("business_constraints") or {}).get("dimensions") or [])
+            state["effective_constraints"] = constraints.state
+            await session.commit()
+        if not {"channel", "product"} <= dimensions:
+            return False
+        existing = [
+            item
+            for item in state.get("subtasks", {}).values()
+            if item.get("constraint_version") == state["constraint_version"]
+        ]
+        if existing:
+            return False
+        specs = [
+            SubtaskSpec(
+                id=f"channel_{uid()[:8]}", role="channel",
+                objective="在已确认的数据截止口径内，量化渠道对目标指标变化的贡献，返回可复核证据。",
+                done_when="给出主要正负渠道贡献项、数值和证据 ID；无法确认时说明缺口。",
+                allowed_tools=["get_metric_definitions", "compare_metrics", "query_metrics"],
+                max_model_calls=min(4, self.settings.subtask_max_model_calls), max_tool_calls=min(3, self.settings.subtask_max_tool_calls),
+            ),
+            SubtaskSpec(
+                id=f"product_{uid()[:8]}", role="product_inventory",
+                objective="在已确认的数据截止口径内，量化商品/SKU 对目标指标变化的贡献，返回可复核证据。",
+                done_when="给出主要正负商品贡献项、数值和证据 ID；无法确认时说明缺口。",
+                allowed_tools=["get_metric_definitions", "compare_metrics", "query_metrics"],
+                max_model_calls=min(4, self.settings.subtask_max_model_calls), max_tool_calls=min(3, self.settings.subtask_max_tool_calls),
+            ),
+        ]
+        try:
+            self.queue_subtasks(state, step, specs)
+        except ValueError:
+            return False
+        state.setdefault("auto_delegated_constraint_versions", []).append(state["constraint_version"])
+        state["subtask_completion_policy"] = "evaluate"
+        state["feedback"] = "用户明确要求同时分析渠道和商品，已按独立只读维度分派子任务；主 Agent 将汇总并核验结果。"
+        await self.commit(task, state, "subtasks_dispatched", {"mode": "explicit_multidomain", "step_id": step["id"], "subtasks": [spec.model_dump() for spec in specs]})
+        return True
+
     async def apply_action(self, task, state, action):
         step = self.current_step(state)
         if step is None:
@@ -658,6 +871,8 @@ class AgentRuntime:
                         ],
                     }
                 state["phase"] = "tool"
+        elif action.kind == "delegate":
+            self.queue_subtasks(state, step, action.subtasks)
         elif action.kind == "step_done":
             state["steps"][step["id"]] = {
                 "status": "succeeded",
@@ -739,6 +954,301 @@ class AgentRuntime:
             state["answer"] = decision.answer or decision.reason
         await self.commit(task, state, "evaluation", decision.model_dump(), status=status)
         return status == "running"
+
+    @staticmethod
+    def _subtask_terminal(subtask):
+        return subtask.get("status") in {"succeeded", "partial", "failed"}
+
+    def _subtask_evidence(self, subtask):
+        return {
+            row["evidence_id"]
+            for row in subtask.get("observations", [])
+            if row.get("status") == "success"
+        }
+
+    def _validate_subtask_decision(self, subtask, decision):
+        calls = (
+            [{"tool": decision.tool, "arguments": decision.arguments, "summary": decision.summary}]
+            if decision.kind == "tool"
+            else [call.model_dump() for call in decision.tool_calls]
+        )
+        if decision.kind in {"tool", "tools"}:
+            if not set(call["tool"] for call in calls) <= set(subtask["allowed_tools"]):
+                raise ValueError("子任务调用了未授权工具")
+            if any(not supports_parallel(call["tool"]) for call in calls):
+                raise ValueError("子任务只能调用只读工具")
+            remaining = subtask["budget"]["tool_calls"] - subtask["usage"]["tool_calls"]
+            if remaining < 1:
+                raise ValueError("子任务工具预算不足")
+            # 模型偶尔会在最后一轮一次请求多个工具；保留最靠前的独立调用，避免整项调查因超额批次失败。
+            return calls[:remaining]
+        allowed = self._subtask_evidence(subtask)
+        cited = set(decision.evidence_ids) | {
+            evidence_id for finding in decision.findings for evidence_id in finding.evidence_ids
+        }
+        if not cited <= allowed:
+            raise ValueError("子任务只能引用自身成功工具返回的证据")
+        if decision.kind == "finish" and decision.findings and not cited:
+            raise ValueError("子任务发现必须关联自身证据")
+        return []
+
+    def _subtask_scope_capsule(self, state):
+        """只向子任务传递已确认的数据范围与指标口径，不泄露父计划或其他业务结论。"""
+        trusted_tools = {"inspect_data_capabilities", "get_metric_definitions"}
+        rows = [
+            {
+                "tool": row["tool"],
+                "result": compact(row.get("data", row.get("result", {})), maximum=1800),
+            }
+            for row in state["observations"]
+            if row.get("status") == "success"
+            and row.get("constraint_version") == state["constraint_version"]
+            and row.get("tool") in trusted_tools
+        ]
+        return rows[-2:]
+
+    def _subtask_context(self, built, subtask, shared_scope=None):
+        """构造子任务专用上下文；收尾回合只保留其自身证据，避免示例或父任务证据越界。"""
+        finish_only = subtask["usage"]["tool_calls"] >= subtask["budget"]["tool_calls"]
+        available_evidence_ids = sorted(self._subtask_evidence(subtask))
+        return {
+            **{key: value for key, value in built.items() if key not in {"context_manifest", "scope_revision"}},
+            "shared_scope": shared_scope or [],
+            "observations": subtask.get("observations", []),
+            "tools": [] if finish_only else catalog(names=subtask["allowed_tools"], include_schema=True),
+            "subtask_remaining_budget": {
+                "model_calls": subtask["budget"]["model_calls"] - subtask["usage"]["model_calls"],
+                "tool_calls": subtask["budget"]["tool_calls"] - subtask["usage"]["tool_calls"],
+            },
+            "finish_only": finish_only,
+            "subtask_available_evidence_ids": available_evidence_ids,
+            "subtask_result_contract": "返回局部发现、限制和证据 ID，不得输出面向用户的结论。",
+        }
+
+    async def execute_subtasks(self, task):
+        """并发推进同一主步骤的临时子 Agent；每个子 Agent 只看到自己的调查上下文。"""
+        state = copy.deepcopy(task.state)
+        active = [
+            item
+            for item in state.get("subtasks", {}).values()
+            if item.get("constraint_version") == state["constraint_version"] and not self._subtask_terminal(item)
+        ]
+        if not active:
+            state["phase"] = "execute"
+            state["feedback"] = "子任务已返回局部发现，请核对证据并完成当前步骤。"
+            await self.commit(task, state, "subtasks_completed", {"subtasks": []})
+            return True
+
+        budget_changed = False
+        for item in active:
+            if not item.get("pending") and item["usage"]["model_calls"] >= item["budget"]["model_calls"]:
+                item["status"] = "partial"
+                item["limitations"] = [
+                    "子 Agent 已达到模型调用预算，主 Agent 将根据其已返回的证据独立汇总与核验。"
+                ]
+                item["finished_at"] = time.time()
+                budget_changed = True
+        ready = [
+            item
+            for item in state.get("subtasks", {}).values()
+            if item.get("constraint_version") == state["constraint_version"]
+            and not self._subtask_terminal(item)
+            and not item.get("pending")
+        ]
+        if not ready and budget_changed:
+            await self.commit(task, state, "subtask_budget_exhausted", {"message": "部分子任务达到自身预算"})
+            task = await self.load(task.id)
+            state = task.state
+        if ready:
+            ready = ready[: self.settings.max_subtasks]
+            task = await self.reserve_many(
+                task,
+                "model_calls",
+                len(ready),
+                phase="subtask",
+                subtask_ids=[item["id"] for item in ready],
+            )
+            if not task:
+                return False
+            state = copy.deepcopy(task.state)
+            contexts = []
+            try:
+                async with self.db.sessions() as session:
+                    start_call = state["usage"]["model_calls"] - len(ready) + 1
+                    for offset, item in enumerate(ready):
+                        current = state["subtasks"][item["id"]]
+                        built = await memory.build_subtask_context(session, task, current, self.settings)
+                        context = self._subtask_context(
+                            built, current, self._subtask_scope_capsule(state)
+                        )
+                        snapshot = await task_context.persist_context_snapshot(
+                            session,
+                            task,
+                            start_call + offset,
+                            "subtask",
+                            {
+                                **built["context_manifest"],
+                                "context_chars": len(json.dumps(context, ensure_ascii=False, default=str)),
+                                "tool_count": len(context.get("tools", [])),
+                                "observation_count": len(context.get("observations", [])),
+                            },
+                        )
+                        current["last_context_snapshot_id"] = snapshot.id
+                        contexts.append((current["id"], context, built["scope_revision"]))
+                    await session.commit()
+            except Exception as exc:
+                self.account(state)
+                state["answer"] = "子任务上下文准备失败，已保留现有证据。"
+                await self.commit(task, state, "subtask_error", {"message": str(exc)[:300]}, status="partial")
+                return False
+            task._scope_revision = contexts[0][2] if contexts else None
+            results = await asyncio.gather(
+                *(
+                    asyncio.wait_for(
+                        self.model.decide("subtask", context),
+                        timeout=min(
+                            self.settings.llm_timeout,
+                            max(0.01, state["budget"]["active_seconds"] - state["turn_usage"]["active_seconds"]),
+                        ),
+                    )
+                    for _, context, _ in contexts
+                ),
+                return_exceptions=True,
+            )
+            usage_total = {"input_tokens": 0, "output_tokens": 0}
+            summaries = []
+            for (subtask_id, _, _), result in zip(contexts, results):
+                subtask = state["subtasks"][subtask_id]
+                subtask["status"] = "running"
+                subtask["usage"]["model_calls"] += 1
+                if isinstance(result, Exception):
+                    usage = getattr(result, "usage", {}) or {}
+                    usage_total["input_tokens"] += usage.get("input_tokens", 0)
+                    usage_total["output_tokens"] += usage.get("output_tokens", 0)
+                    subtask["status"] = "failed"
+                    subtask["limitations"] = ["子任务模型调用失败或返回无效结构，主 Agent 将根据其余证据继续。"]
+                    summaries.append({"id": subtask_id, "status": "failed"})
+                    continue
+                raw_decision, usage = result
+                usage_total["input_tokens"] += usage.get("input_tokens", 0)
+                usage_total["output_tokens"] += usage.get("output_tokens", 0)
+                subtask["usage"]["input_tokens"] += usage.get("input_tokens", 0)
+                subtask["usage"]["output_tokens"] += usage.get("output_tokens", 0)
+                try:
+                    decision = SubtaskDecision.model_validate(raw_decision)
+                    calls = self._validate_subtask_decision(subtask, decision)
+                    if calls:
+                        subtask["pending"] = [
+                            {
+                                **call,
+                                "id": uid(),
+                                "step_id": subtask["parent_step_id"],
+                                "subtask_id": subtask_id,
+                            }
+                            for call in calls
+                        ]
+                    else:
+                        subtask["findings"] = [item.model_dump() for item in decision.findings]
+                        subtask["limitations"] = decision.limitations
+                        subtask["evidence_ids"] = sorted(
+                            set(decision.evidence_ids)
+                            | {eid for item in decision.findings for eid in item.evidence_ids}
+                        )
+                        subtask["status"] = "succeeded" if decision.kind == "finish" else "partial"
+                        subtask["finished_at"] = time.time()
+                    summaries.append({"id": subtask_id, "kind": decision.kind, "status": subtask["status"]})
+                except (ValueError, TypeError) as exc:
+                    subtask["status"] = "partial"
+                    subtask["evidence_ids"] = sorted(self._subtask_evidence(subtask))
+                    subtask["limitations"] = [
+                        f"子任务收尾未通过证据边界校验：{str(exc)[:300]}；主 Agent 将仅根据已保留的本地证据核验。"
+                    ]
+                    subtask["finished_at"] = time.time()
+                    summaries.append({"id": subtask_id, "status": "partial"})
+            self.account(state, usage_total)
+            await self.commit(task, state, "subtask_decision", {"subtasks": summaries})
+            task = await self.load(task.id)
+
+        state = copy.deepcopy(task.state)
+        pending = [
+            (item, call)
+            for item in state.get("subtasks", {}).values()
+            if item.get("constraint_version") == state["constraint_version"]
+            for call in item.get("pending", [])
+        ]
+        if not pending:
+            relevant = [
+                item
+                for item in state.get("subtasks", {}).values()
+                if item.get("constraint_version") == state["constraint_version"]
+            ]
+            if relevant and all(self._subtask_terminal(item) for item in relevant):
+                if state.get("subtask_completion_policy") == "evaluate":
+                    state["phase"] = "evaluate"
+                    state["feedback"] = "子任务调查已结束；请只基于保留证据完成评估，不要重规划或发起更多工具调用。"
+                else:
+                    state["phase"] = "execute"
+                    state["feedback"] = "子任务已返回局部发现，请核对证据并完成当前步骤。"
+                await self.commit(
+                    task,
+                    state,
+                    "subtasks_completed",
+                    {"subtasks": [{"id": item["id"], "status": item["status"]} for item in relevant]},
+                )
+            return True
+
+        task = await self.reserve_many(
+            task,
+            "tool_calls",
+            len(pending),
+            phase="subtask_tools",
+            subtask_ids=[item["id"] for item, _ in pending],
+        )
+        if not task:
+            return False
+        state = copy.deepcopy(task.state)
+        pending = [
+            (item, call)
+            for item in state.get("subtasks", {}).values()
+            if item.get("constraint_version") == state["constraint_version"]
+            for call in item.get("pending", [])
+        ]
+        remaining = max(1, state["budget"]["active_seconds"] - state["turn_usage"]["active_seconds"])
+        fingerprints = [self.tool_fingerprint(call, state["constraint_version"]) for _, call in pending]
+        outcomes = await asyncio.gather(
+            *(self.invoke_read_tool(task, call, remaining) for _, call in pending), return_exceptions=True
+        )
+        observations, evidences = [], []
+        for (subtask, call), fingerprint, outcome in zip(pending, fingerprints, outcomes):
+            if isinstance(outcome, Exception):
+                outcome = ("failed", "tool_unavailable", {"message": "子任务工具执行失败或超时。", "retryable": True})
+            observation, evidence = self.record_subtask_outcome(
+                state, task, subtask["id"], call, fingerprint, *outcome
+            )
+            observations.append(observation)
+            evidences.append(evidence)
+        self.account(state)
+        for subtask in state["subtasks"].values():
+            subtask.pop("pending", None)
+        await self.commit(
+            task,
+            state,
+            "subtask_tool_result",
+            {"count": len(observations), "subtasks": sorted({row["subtask_id"] for row in observations})},
+            evidences=evidences,
+        )
+        return True
+
+    def record_subtask_outcome(self, state, task, subtask_id, call, fingerprint, status, error, result):
+        observation, evidence = self.record_tool_outcome(state, task, call, fingerprint, status, error, result)
+        observation["subtask_id"] = subtask_id
+        evidence.result["subtask_id"] = subtask_id
+        subtask = state["subtasks"][subtask_id]
+        subtask["usage"]["tool_calls"] += 1
+        subtask["observations"].append(observation)
+        if status == "success":
+            subtask["evidence_ids"].append(observation["evidence_id"])
+        return observation, evidence
 
     async def execute_tool(self, task):
         pending = task.state["pending"]

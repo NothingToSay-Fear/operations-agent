@@ -44,11 +44,24 @@ class ToolCall(StrictModel):
     summary: str = Field(min_length=1, max_length=500)
 
 
+class SubtaskSpec(StrictModel):
+    """主 Agent 下发给临时专项执行器的受限任务单。"""
+
+    id: str = Field(min_length=1, max_length=40)
+    role: Literal["channel", "product_inventory", "knowledge", "general"]
+    objective: str = Field(min_length=1, max_length=800)
+    done_when: str = Field(min_length=1, max_length=800)
+    allowed_tools: list[str] = Field(min_length=1, max_length=6)
+    max_model_calls: int = Field(default=3, ge=1, le=4)
+    max_tool_calls: int = Field(default=3, ge=1, le=4)
+
+
 class Action(StrictModel):
-    kind: Literal["tool", "tools", "step_done", "replan", "ask_user"]
+    kind: Literal["tool", "tools", "delegate", "step_done", "replan", "ask_user"]
     tool: str = Field(default="", max_length=80)
     arguments: dict = Field(default_factory=dict)
     tool_calls: list[ToolCall] = Field(default_factory=list, max_length=6)
+    subtasks: list[SubtaskSpec] = Field(default_factory=list, max_length=3)
     summary: str = Field(min_length=1, max_length=2000)
     evidence_ids: list[str] = Field(default_factory=list, max_length=30)
 
@@ -60,6 +73,42 @@ class Action(StrictModel):
             raise ValueError("批量工具动作必须提供tool_calls")
         if self.kind != "tools" and self.tool_calls:
             raise ValueError("只有批量工具动作可以提供tool_calls")
+        if self.kind == "delegate" and not self.subtasks:
+            raise ValueError("委派动作必须提供子任务")
+        if self.kind != "delegate" and self.subtasks:
+            raise ValueError("只有委派动作可以提供子任务")
+        if len({item.id for item in self.subtasks}) != len(self.subtasks):
+            raise ValueError("子任务ID重复")
+        return self
+
+
+class SubtaskFinding(StrictModel):
+    statement: str = Field(min_length=1, max_length=800)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=12)
+
+
+class SubtaskDecision(StrictModel):
+    """子 Agent 的局部执行决策；它不能重规划总体任务或直接面向用户交付。"""
+
+    kind: Literal["tool", "tools", "finish", "stop"]
+    tool: str = Field(default="", max_length=80)
+    arguments: dict = Field(default_factory=dict)
+    tool_calls: list[ToolCall] = Field(default_factory=list, max_length=4)
+    summary: str = Field(min_length=1, max_length=1600)
+    findings: list[SubtaskFinding] = Field(default_factory=list, max_length=8)
+    limitations: list[str] = Field(default_factory=list, max_length=8)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=24)
+
+    @model_validator(mode="after")
+    def validate_action(self):
+        if self.kind == "tool" and not self.tool:
+            raise ValueError("单工具动作必须提供tool")
+        if self.kind == "tools" and not self.tool_calls:
+            raise ValueError("批量工具动作必须提供tool_calls")
+        if self.kind != "tools" and self.tool_calls:
+            raise ValueError("只有批量工具动作可以提供tool_calls")
+        if self.kind in {"finish", "stop"} and not (self.findings or self.limitations):
+            raise ValueError("子任务结束时必须提供发现或限制")
         return self
 
 

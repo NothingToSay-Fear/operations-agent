@@ -6,7 +6,7 @@ import httpx
 import pytest
 from langchain_openai import ChatOpenAI
 
-from app.agent.contracts import Action, Decision, Plan
+from app.agent.contracts import Action, Decision, Plan, SubtaskDecision
 from app.agent.model import ModelGateway, StructuredOutputError
 
 
@@ -24,10 +24,21 @@ VALUES = {
         "tool_calls": [],
         "summary": "查询渠道",
         "evidence_ids": [],
+        "subtasks": [],
+    },
+    "subtask": {
+        "kind": "finish",
+        "tool": "",
+        "arguments": {},
+        "tool_calls": [],
+        "summary": "已核对渠道贡献",
+        "findings": [{"statement": "渠道数据已取得", "evidence_ids": ["ev_001"]}],
+        "limitations": [],
+        "evidence_ids": ["ev_001"],
     },
     "evaluate": {"kind": "continue", "reason": "仍有待完成步骤", "answer": "", "assessments": []},
 }
-SCHEMAS = {"plan": Plan, "execute": Action, "evaluate": Decision}
+SCHEMAS = {"plan": Plan, "execute": Action, "subtask": SubtaskDecision, "evaluate": Decision}
 
 
 def completion(message, finish_reason="stop"):
@@ -57,7 +68,7 @@ def model_with_transport(client):
 
 
 @pytest.mark.parametrize("deepseek", [False, True])
-@pytest.mark.parametrize("phase", ["plan", "execute", "evaluate"])
+@pytest.mark.parametrize("phase", ["plan", "execute", "subtask", "evaluate"])
 async def test_actual_langchain_structured_output_adapter(settings, deepseek, phase):
     if deepseek:
         settings = settings.model_copy(

@@ -111,7 +111,8 @@ async def conversation_view(session, task):
             if isinstance(call_number, int) and call_number >= 0:
                 turn_model_calls = max(turn_model_calls, call_number)
             else:
-                turn_model_calls += 1
+                count = payload.get("count", 1)
+                turn_model_calls += count if isinstance(count, int) and count > 0 else 1
             continue
 
         content = ""

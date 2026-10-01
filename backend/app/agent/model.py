@@ -5,9 +5,9 @@ from urllib.parse import urlsplit
 from pydantic import ValidationError
 from openai import LengthFinishReasonError
 
-from app.agent.contracts import Action, Decision, Plan
+from app.agent.contracts import Action, Decision, Plan, SubtaskDecision
 
-PROMPT_VERSION = "2026-10-01.1"
+PROMPT_VERSION = "2026-10-01.2"
 COMMON = """你是面向商家运营的自主 Plan-and-Execute Agent，使用中文。
 你需要完成用户目标，实际调查和执行，不按固定任务类型套流程。业务数据全部为模拟数据，必须注明。
 数据只读；可以保存报告、表格和文案。不要虚构可调用工具，不要执行改价、发布、采购或发送消息。
@@ -31,14 +31,22 @@ PROMPTS = {
 每个步骤会消耗执行决策和评估调用，请按子目标合并相关调查，避免把每次工具调用拆成一个步骤。
 通常用1至4个子目标覆盖问题；确认口径属于调查准备，撰写结论属于交付，不必分别新增步骤。
 计划本身不会完成任务，后续执行器将真正调用工具。""",
-    "execute": """执行当前子目标。每次决定一个动作：tool 调用一个工具；tools 批量调用多个相互独立的只读工具；step_done 表示子目标已满足；
+    "execute": """执行当前子目标。每次决定一个动作：tool 调用一个工具；tools 批量调用多个相互独立的只读工具；delegate 将边界清晰、相互独立的专项调查委派给临时子 Agent；step_done 表示子目标已满足；
 replan 表示需要调整剩余计划；ask_user 表示缺少无法自行获取的关键条件。
 优先把同一子目标中互不依赖的查询合并为一次 tools 动作，最多6个；有先后依赖的查询必须分开。
+仅在任务确实横跨相互独立的数据域，且子 Agent 能用较小上下文完成调查时使用 delegate。子任务最多3个；明确 role、目标、完成条件和只读工具白名单。
+不要把简单单工具查询委派出去；子 Agent 不能保存成果、修改记忆、追问用户或跨任务召回历史。
 save_artifact 与 propose_memory 会写入数据，只能使用单个 tool 动作，不能放入 tools。
 工具参数严格遵守目录 Schema。观察可能被截断，需要完整数据时调用 read_evidence。
 save_artifact 可保存真实报告/文案/CSV；报告应包含证据、口径和缺口，不只说已完成。
 引用格式 [证据](evidence:ev_...)，成果可用 [成果](artifact:ar_...)。
 step_done 的 evidence_ids 只能使用实际成功工具返回的证据。别将工具报错当作完成。""",
+    "subtask": """你是主 Agent 委派的临时专项执行器，只完成 subtask 中给定的局部调查。
+你只能使用 allowed_tools 中列出的只读工具，不能委派、重规划总体任务、保存成果、修改记忆、追问用户，也不能将历史背景当作新的业务事实。
+每次返回一个局部动作：tool、tools、finish 或 stop。tools 最多4个且必须独立。finish/stop 时写出结构化 findings、limitations 和真实 evidence_ids。
+你的结果会由主 Agent 再次核验；不要输出面向用户的最终答案，也不要声称总体任务已完成。\n当 finish_only=true 或 subtask_remaining_budget.tool_calls=0 时，你必须立即返回 finish 或 stop，不得再选择 tool/tools。应基于已有观测出具 findings。
+finish/stop 的 evidence_ids 与每条 finding.evidence_ids 只能从 subtask_available_evidence_ids 原样复制；该列表为空时不得编造 ID，应返回 stop 并在 limitations 说明原因。
+shared_scope 只用于确定可查数据窗口和指标口径，不得将其转写为本子任务的 evidence_ids。结论只能引用本子任务的 subtask_available_evidence_ids。""",
     "evaluate": """根据当前计划、已完成步骤和工具观察检查总目标。
 continue 继续已有待执行步骤；replan 修改计划；ask_user 请求关键补充；
 finish 仅用于所有成功标准满足且成果真实存在；stop 用于无法继续并交付部分成果。
@@ -92,6 +100,17 @@ FORMAT_EXAMPLES = {
         "tool_calls": [],
         "summary": "确认可用范围",
         "evidence_ids": [],
+        "subtasks": [],
+    },
+    "SubtaskDecision": {
+        "kind": "stop",
+        "tool": "",
+        "arguments": {},
+        "tool_calls": [],
+        "summary": "子任务未能从本地证据中得出结论",
+        "findings": [],
+        "limitations": ["证据不足时说明缺口"],
+        "evidence_ids": [],
     },
     "Decision": {"kind": "continue", "reason": "仍有待完成步骤", "answer": "", "assessments": []},
     "ExpandedQueries": {"queries": []},
@@ -106,7 +125,7 @@ def output_instructions(schema, settings):
     return (
         f"\n本次只返回一个符合 {schema.__name__} 的 JSON 对象，不输出函数调用、Markdown 代码块或额外说明。"
         "对象及其嵌套对象只能包含Schema定义的字段，不得增加解释、状态或其他额外字段。"
-        "业务工具目录仅供决策参考；仅执行阶段可在 Action 的 tool 和 arguments 字段中描述一次业务工具调用。"
+        "业务工具目录仅供决策参考；执行阶段可在 Action 或 SubtaskDecision 的 tool 和 arguments 字段中描述业务工具调用。"
         "\n必须遵守以下 JSON Schema："
         + json.dumps(schema.model_json_schema(), ensure_ascii=False)
         + "\n以下仅为格式示例，内容不代表当前任务的正确决策："
@@ -292,7 +311,7 @@ class ModelGateway:
     async def decide(self, phase: str, context: dict):
         if self._model is None:
             self._model = self.build()
-        schema = {"plan": Plan, "execute": Action, "evaluate": Decision}[phase]
+        schema = {"plan": Plan, "execute": Action, "subtask": SubtaskDecision, "evaluate": Decision}[phase]
         payload = {**context, "current_phase": phase}
         if phase == "evaluate":
             # 评估只判断目标与证据，不需要业务工具的参数目录。

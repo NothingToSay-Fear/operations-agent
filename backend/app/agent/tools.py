@@ -138,15 +138,18 @@ REGISTRY = {
 }
 
 
-def catalog():
+def catalog(*, names=None, include_schema=True):
+    """按调用阶段返回工具目录；规划阶段无需携带全部参数 Schema。"""
+    selected = set(names) if names is not None else None
     return [
         {
             "name": name,
             "description": spec.description,
-            "parameters": spec.schema.model_json_schema(),
+            **({"parameters": spec.schema.model_json_schema()} if include_schema else {}),
             "parallel_safe": spec.parallel_safe,
         }
         for name, spec in REGISTRY.items()
+        if selected is None or name in selected
     ]
 
 

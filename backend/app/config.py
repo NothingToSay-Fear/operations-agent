@@ -31,10 +31,16 @@ class Settings(BaseSettings):
     worker_poll_seconds: float = 1
     lease_seconds: int = 120
     max_model_calls: int = 30
-    max_tool_calls: int = 20
+    max_tool_calls: int = 30
     max_replans: int = 5
     max_active_seconds: int = 300
     max_step_tools: int = 6
+    max_subtasks: int = 3
+    subtask_max_model_calls: int = 4
+    subtask_max_tool_calls: int = 3
+    subtask_context_char_budget: int = 8000
+    main_context_observation_limit: int = 10
+    main_context_observation_char_budget: int = 7000
     embedding_model_path: str = ""
     reranker_model_path: str = ""
     embedding_model_id: str = "BAAI/bge-small-zh-v1.5"

@@ -188,6 +188,20 @@ CASES = [
         "结合退款原因、商品信息与品牌规范，选择一个值得优化的商品，保存文案和验证建议。",
         "跨工具组合且不将建议写成事实",
     ),
+    (
+        "M01",
+        "mixed",
+        "多维并行",
+        "分析数据截止日期之前七天的GMV，相比前七天下降或增长的主要贡献项是什么？结合渠道和商品数据，给出两个有证据的运营建议。",
+        "必须生成渠道与商品两个隔离子任务，主 Agent 汇总可追溯证据。",
+    ),
+    (
+        "M02",
+        "mixed",
+        "单维对照",
+        "只分析数据截止日期之前七天与前七天的渠道 GMV 变化，找出最大正贡献和负贡献，给出一条有证据的建议。",
+        "单维问题不应触发商品子任务。",
+    ),
 ]
 
 
@@ -222,6 +236,8 @@ async def evaluate(args):
                 update={
                     "app_database_url": f"sqlite+aiosqlite:///{app_path.as_posix()}",
                     "commerce_database_url": f"sqlite+aiosqlite:///file:{db_path.as_posix()}?mode=ro&uri=true",
+                    **({"max_model_calls": args.max_model_calls} if args.max_model_calls else {}),
+                    **({"max_tool_calls": args.max_tool_calls} if args.max_tool_calls else {}),
                 }
             )
             database = Database(config)
@@ -252,6 +268,7 @@ async def evaluate(args):
                         answer=task.state["answer"],
                         plans=task.state["plans"],
                         observations=task.state["observations"],
+                        subtasks=task.state.get("subtasks", {}),
                         human_review={
                             "verdict": "pending",
                             "numeric_correctness": None,
@@ -305,6 +322,8 @@ def main():
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--case", default="")
     parser.add_argument("--output", default="../evaluation-reports")
+    parser.add_argument("--max-model-calls", type=int, default=0)
+    parser.add_argument("--max-tool-calls", type=int, default=0)
     args = parser.parse_args()
     if args.list:
         for c in CASES:

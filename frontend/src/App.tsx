@@ -25,11 +25,20 @@ const number = (n: number | null | undefined, digits = 0) => n == null ? '—' :
 function Brand() { return <div className="brand"><div className="brand-symbol">序</div><span>序策<small>OPERATIONS AGENT</small></span></div>; }
 
 function Markdown({text, onEvidence, onArtifact}: {text: string; onEvidence?: (id: string) => void; onArtifact?: (id: string) => void}) {
+  const targetId = (href: string | undefined, type: 'ev' | 'ar') => {
+    const prefix = type === 'ev' ? 'evidence:' : 'artifact:';
+    const match = href?.match(new RegExp(`(?:^${prefix}|#)(${type}_[a-zA-Z0-9_-]+)$`));
+    return match?.[1];
+  };
   return <div className="markdown"><ReactMarkdown remarkPlugins={[remarkGfm]}
     urlTransform={url => /^(evidence:ev_|artifact:ar_)[a-zA-Z0-9_-]+$/.test(url) ? url : defaultUrlTransform(url)}
-    components={{a: ({href, children}) => href?.startsWith('evidence:') ? <button className="inline-link" onClick={() => onEvidence?.(href.slice(9))}>{children}</button>
-      : href?.startsWith('artifact:') ? <button className="inline-link" onClick={() => onArtifact?.(href.slice(9))}>{children}</button>
-      : <a href={href} target="_blank" rel="noreferrer noopener">{children}</a>}}>{text}</ReactMarkdown></div>;
+    components={{a: ({href, children}) => {
+      const evidenceId = targetId(href, 'ev');
+      const artifactId = targetId(href, 'ar');
+      if (evidenceId) return <button type="button" className="inline-link" onClick={() => onEvidence?.(evidenceId)}>{children}</button>;
+      if (artifactId) return <button type="button" className="inline-link" onClick={() => onArtifact?.(artifactId)}>{children}</button>;
+      return <a href={href} target="_blank" rel="noreferrer noopener">{children}</a>;
+    }}}>{text}</ReactMarkdown></div>;
 }
 
 function ConversationMessage({turn,onEvidence,onArtifact}:{turn:ConversationTurn;onEvidence:(id:string)=>void;onArtifact:(id:string)=>void}) {
