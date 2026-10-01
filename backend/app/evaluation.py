@@ -10,7 +10,13 @@ from pathlib import Path
 from app.agent.runtime import AgentRuntime, initial_state
 from app.config import get_settings
 from app.db import Database
-from app.models import Base, Task, User
+from app.evaluation_database import (
+    evaluation_urls,
+    grant_commerce_read_access,
+    reset_application_database,
+    reset_commerce_database,
+)
+from app.models import Task, User
 from app.seed import seed_database
 
 CASES = [
@@ -217,33 +223,30 @@ async def evaluate(args):
     out = Path(args.output).resolve() / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out.mkdir(parents=True, exist_ok=False)
     reports = []
-    sources = {}
+    app_url, commerce_admin_url, commerce_reader_url = evaluation_urls("AGENT_EVALUATION", settings)
     for case_id, scenario, category, goal, rubric in selected:
-        if scenario not in sources:
-            db_path = out / f"facts-{len(sources) + 1}.db"
+        for repeat in range(args.repeat):
+            await reset_application_database(app_url)
+            await reset_commerce_database(commerce_admin_url)
             await seed_database(
-                f"sqlite+aiosqlite:///{db_path.as_posix()}",
+                commerce_admin_url,
                 days=60,
                 sku_count=32,
                 order_target=2500,
                 scenario=scenario,
             )
-            sources[scenario] = db_path
-        for repeat in range(args.repeat):
-            db_path = sources[scenario]
-            app_path = out / f"state-{case_id}-{repeat + 1}.db"
+            await grant_commerce_read_access(commerce_admin_url, commerce_reader_url)
             config = settings.model_copy(
                 update={
-                    "app_database_url": f"sqlite+aiosqlite:///{app_path.as_posix()}",
-                    "commerce_database_url": f"sqlite+aiosqlite:///file:{db_path.as_posix()}?mode=ro&uri=true",
+                    "app_database_url": app_url,
+                    "commerce_admin_url": commerce_admin_url,
+                    "commerce_database_url": commerce_reader_url,
                     **({"max_model_calls": args.max_model_calls} if args.max_model_calls else {}),
                     **({"max_tool_calls": args.max_tool_calls} if args.max_tool_calls else {}),
                 }
             )
             database = Database(config)
             try:
-                async with database.engine.begin() as conn:
-                    await conn.run_sync(Base.metadata.create_all)
                 async with database.sessions() as session:
                     user = User(id="evaluation-user", username="evaluation-user", password_hash="disabled")
                     session.add(user)

@@ -4,17 +4,22 @@ import argparse
 import asyncio
 from datetime import date
 import json
-import os
 from pathlib import Path
 import time
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 from app import knowledge, knowledge_service, memory, retrieval
 from app.agent.runtime import initial_state
 from app.config import Settings
 from app.db import Database
-from app.models import Base, Document, Task, User
+from app.evaluation_database import (
+    evaluation_urls,
+    grant_commerce_read_access,
+    reset_application_database,
+    reset_commerce_database,
+)
+from app.models import Document, Task, User
 from app.extension_models import HistoryUnit
 from app.seed import seed_database
 
@@ -49,51 +54,32 @@ CASES = [
 ]
 
 
-async def run(directory, postgres=False):
+async def run(directory):
     settings = Settings()
     if not settings.embedding_model_path or not settings.reranker_model_path:
         raise RuntimeError("评测要求配置真实向量与精排模型目录")
     directory.mkdir(parents=True, exist_ok=False)
-    app_url = (
-        os.environ.get("RAG_EVALUATION_DATABASE_URL")
-        if postgres
-        else f"sqlite+aiosqlite:///{(directory / 'app.db').as_posix()}"
-    )
-    if postgres and (not app_url or app_url == settings.app_database_url):
-        raise RuntimeError("请通过 RAG_EVALUATION_DATABASE_URL 提供独立评测数据库，禁止使用应用主库")
-    commerce_path = (directory / "commerce.db").as_posix()
+    app_url, commerce_admin_url, commerce_reader_url = evaluation_urls("RAG_EVALUATION", settings)
+    await reset_application_database(app_url, retrieval_indexes=True)
+    await reset_commerce_database(commerce_admin_url)
     settings = settings.model_copy(
         update={
             "app_database_url": app_url,
-            "commerce_database_url": f"sqlite+aiosqlite:///file:{commerce_path}?mode=ro&uri=true",
+            "commerce_admin_url": commerce_admin_url,
+            "commerce_database_url": commerce_reader_url,
         }
     )
     await seed_database(
-        f"sqlite+aiosqlite:///{commerce_path}",
+        commerce_admin_url,
         days=28,
         sku_count=12,
         order_target=100,
         as_of=date(2026, 9, 28),
     )
+    await grant_commerce_read_access(commerce_admin_url, commerce_reader_url)
     db = Database(settings)
     results = []
     try:
-        async with db.engine.begin() as connection:
-            if postgres:
-                await connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
-            await connection.run_sync(Base.metadata.create_all)
-            if postgres:
-                for table in ["knowledge_segments", "history_units"]:
-                    await connection.execute(
-                        text(
-                            f"CREATE INDEX IF NOT EXISTS ix_{table}_terms ON {table} USING gin (to_tsvector('simple', search_terms))"
-                        )
-                    )
-                    await connection.execute(
-                        text(
-                            f"CREATE INDEX IF NOT EXISTS ix_{table}_vector ON {table} USING hnsw (embedding vector_cosine_ops)"
-                        )
-                    )
         model_health = await retrieval.health(settings)
         if model_health["embedding"] != "ready" or model_health["reranker"] != "ready":
             raise RuntimeError("真实模型加载失败，请检查隔离依赖及模型目录")
@@ -139,16 +125,12 @@ async def run(directory, postgres=False):
                         "expected": label,
                         "rank": rank,
                         "bm25_rank": bm25_hits.index(expected) + 1 if expected in bm25_hits else None,
-                        "ts_rank_cd_rank": (
-                            sparse_hits.index(expected) + 1
-                            if postgres and expected in sparse_hits
-                            else None
-                        ),
+                        "ts_rank_cd_rank": sparse_hits.index(expected) + 1
+                        if expected in sparse_hits
+                        else None,
                         "no_answer_false_positive": bool(hits) if label is None else None,
                         "bm25_no_answer_false_positive": bool(bm25_hits) if label is None else None,
-                        "ts_rank_cd_no_answer_false_positive": (
-                            bool(sparse_hits) if postgres and label is None else None
-                        ),
+                        "ts_rank_cd_no_answer_false_positive": bool(sparse_hits) if label is None else None,
                         "mode": result["retrieval"],
                         "elapsed_ms": result["elapsed_ms"],
                         "stage_ms": result["stage_ms"],
@@ -182,40 +164,28 @@ async def run(directory, postgres=False):
         recall = sum(r["rank"] is not None for r in answered) / len(answered)
         mrr = sum(1 / r["rank"] if r["rank"] else 0 for r in answered) / len(answered)
         bm25_recall = sum(r["bm25_rank"] is not None for r in answered) / len(answered)
-        bm25_mrr = sum(1 / r["bm25_rank"] if r["bm25_rank"] else 0 for r in answered) / len(
+        bm25_mrr = sum(1 / r["bm25_rank"] if r["bm25_rank"] else 0 for r in answered) / len(answered)
+        ts_rank_cd_recall = sum(r["ts_rank_cd_rank"] is not None for r in answered) / len(answered)
+        ts_rank_cd_mrr = sum(1 / r["ts_rank_cd_rank"] if r["ts_rank_cd_rank"] else 0 for r in answered) / len(
             answered
-        )
-        ts_rank_cd_recall = (
-            sum(r["ts_rank_cd_rank"] is not None for r in answered) / len(answered)
-            if postgres
-            else None
-        )
-        ts_rank_cd_mrr = (
-            sum(1 / r["ts_rank_cd_rank"] if r["ts_rank_cd_rank"] else 0 for r in answered)
-            / len(answered)
-            if postgres
-            else None
         )
         negatives = [r for r in results if not r["expected"]]
         report = {
-            "database": "PostgreSQL" if postgres else "SQLite",
+            "database": "PostgreSQL",
             "models": model_health,
             "cases": results,
             "recall_at_5": recall,
             "mrr": mrr,
             "bm25_recall_at_5": bm25_recall,
             "bm25_mrr": bm25_mrr,
-            "bm25_no_answer_false_positive_rate": sum(
-                r["bm25_no_answer_false_positive"] for r in negatives
-            )
+            "bm25_no_answer_false_positive_rate": sum(r["bm25_no_answer_false_positive"] for r in negatives)
             / len(negatives),
             "ts_rank_cd_recall_at_5": ts_rank_cd_recall,
             "ts_rank_cd_mrr": ts_rank_cd_mrr,
-            "ts_rank_cd_no_answer_false_positive_rate": (
-                sum(r["ts_rank_cd_no_answer_false_positive"] for r in negatives) / len(negatives)
-                if postgres
-                else None
-            ),
+            "ts_rank_cd_no_answer_false_positive_rate": sum(
+                r["ts_rank_cd_no_answer_false_positive"] for r in negatives
+            )
+            / len(negatives),
             "no_answer_false_positive_rate": sum(r["no_answer_false_positive"] for r in negatives)
             / len(negatives),
             "history_isolation": True,
@@ -228,11 +198,7 @@ async def run(directory, postgres=False):
             f"# 真实 RAG 评测\n\n数据库：{report['database']}\n\n"
             f"混合检索 Recall@5：{recall:.3f}；MRR：{mrr:.3f}。\n\n"
             f"BM25 Recall@5：{bm25_recall:.3f}；MRR：{bm25_mrr:.3f}。\n\n"
-            + (
-                f"ts_rank_cd Recall@5：{ts_rank_cd_recall:.3f}；MRR：{ts_rank_cd_mrr:.3f}。\n\n"
-                if postgres
-                else ""
-            )
+            + f"ts_rank_cd Recall@5：{ts_rank_cd_recall:.3f}；MRR：{ts_rank_cd_mrr:.3f}。\n\n"
             + f"无答案误命中率：{report['no_answer_false_positive_rate']:.3f}\n\n"
             f"通过：{report['passed']}。逐题排名与轨迹见 report.json。\n",
             encoding="utf-8",
@@ -245,10 +211,9 @@ async def run(directory, postgres=False):
 
 def main():
     parser = argparse.ArgumentParser(description="真实 RAG 与任务历史隔离评测")
-    parser.add_argument("--postgres", action="store_true")
     parser.add_argument("--output", default="evaluation-reports/rag-" + str(time.time_ns()))
     args = parser.parse_args()
-    passed = asyncio.run(run(Path(args.output).resolve(), args.postgres))
+    passed = asyncio.run(run(Path(args.output).resolve()))
     raise SystemExit(0 if passed else 1)
 
 

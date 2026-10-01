@@ -17,7 +17,7 @@
 - 结构化/语义分块、版本化后台索引、PostgreSQL 全文与向量召回、RRF 和真实 BGE 精排。
 - 当前任务摘要与历史召回；长期记忆经用户确认后生效，支持修改、到期、停用和忘记。
 - 管理员公共资料和用户个人资料；公共资料由每个用户独立启用，不共享个人任务或记忆。
-- 30 个真实模型评测场景；协议、权限、数值与恢复测试使用明确的测试替身。
+- 32 个真实模型评测场景；协议、权限、数值与恢复测试使用明确的测试替身。
 
 **未配置模型时可以查看数据和管理资料，任务会明确进入“待处理”。应用没有伪造分析的演示模型回退。**
 
@@ -136,21 +136,30 @@ COMMERCE_DATABASE_URL=sqlite+aiosqlite:///file:D:/project/operations-agent/backe
 
 运行图按 `guard → plan / execute / tools / evaluate` 显式路由。中间计划步骤完成后直接进入下一个满足依赖的步骤，只在计划结束、关键失败、重规划或预算收尾时执行全局评估，避免每个小步骤额外消耗一次模型调用。数据库任务状态仍是唯一持久化执行来源，防止与框架 checkpoint 形成双重真相。
 
-真实 RAG 评测在 `backend/` 执行：
+测试、RAG 评测和真实模型评测均使用独立 PostgreSQL/pgvector 容器，不使用 SQLite 作为验收环境：
 
 ```powershell
-python -m app.rag_evaluation
+docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from tests tests
+docker compose -f docker-compose.test.yml down -v
 ```
 
-默认生成独立 SQLite 数据集及 JSON/Markdown 报告。验证 PostgreSQL 时，另建空的评测数据库并启用 vector 扩展，通过 `RAG_EVALUATION_DATABASE_URL` 配置后执行 `python -m app.rag_evaluation --postgres`；评测拒绝使用应用主库。报告包含逐题排名、Recall@5、MRR、无答案误命中、阶段耗时及当前任务历史隔离检查。
+RAG 评测使用独立的 `operations_test`、`commerce_test` 数据库和真实本地向量、精排模型：
+
+```powershell
+docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from rag-evaluation rag-evaluation
+docker compose -f docker-compose.test.yml down -v
+```
+
+报告包含逐题排名、Recall@5、MRR、BM25 与 `ts_rank_cd` 基线、无答案误命中、阶段耗时及当前任务历史隔离检查。
 
 ## 测试与评测
 
-后端：
+后端测试必须在独立 PostgreSQL/pgvector 测试容器中运行：
 
 ```powershell
+docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from tests tests
+docker compose -f docker-compose.test.yml down -v
 Set-Location backend
-python -m pytest -q
 python -m ruff check app tests
 python -m ruff format --check app tests migrations
 ```
@@ -162,15 +171,15 @@ Set-Location frontend
 npm run build
 ```
 
-真实模型评测在 `backend/` 执行，需要已经配置可用模型，会产生实际模型调用费用：
+真实模型评测同样只使用独立 PostgreSQL 测试库，需要已经配置可用模型，会产生实际模型调用费用：
 
 ```powershell
-python -m app.evaluation --list
-python -m app.evaluation --case D01,D02,D03 --repeat 5
-python -m app.evaluation --repeat 3
+docker compose -f docker-compose.test.yml run --rm agent-evaluation --list
+docker compose -f docker-compose.test.yml run --rm agent-evaluation --case D01,D02,D03 --repeat 5
+docker compose -f docker-compose.test.yml run --rm agent-evaluation --repeat 3
 ```
 
-每次评测使用独立 SQLite 数据库，输出到 `evaluation-reports/<UTC时间>/`；不会使用或修改正在运行的应用数据。报告保存计划、工具观察、预算和答案。模型声称完成仅是机械指标，质量通过率必须在人工核对数值、证据和目标覆盖后统计。
+每次评测会清空并重新创建独立 PostgreSQL 测试库中的应用表和模拟经营表，输出到 `evaluation-reports/<UTC时间>/`；不会使用或修改正在运行的应用数据。报告保存计划、工具观察、预算和答案。模型声称完成仅是机械指标，质量通过率必须在人工核对数值、证据和目标覆盖后统计。
 
 ## 运行约束
 
