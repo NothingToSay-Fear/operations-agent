@@ -52,6 +52,14 @@
 }
 .messages .agent-message.answer .markdown > :first-child { margin-top: 0; }
 .messages .agent-message.answer .markdown > :last-child { margin-bottom: 0; }
+.messages .agent-message.answer .answer-usage {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid #ffffff0d;
+  color: #71836d;
+  font-size: 10px;
+  text-align: right;
+}
 
 @media(max-width:800px) {
   .messages .user-message {

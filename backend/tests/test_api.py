@@ -53,7 +53,7 @@ async def test_conversation_restores_all_user_and_assistant_turns(client):
     database = client.test_app.state.db
     async with database.sessions() as session, session.begin():
         task = await session.get(Task, task_id)
-        state = {**task.state, "seq": 3, "answer": "第二轮回答"}
+        state = {**task.state, "seq": 6, "answer": "第二轮回答"}
         state["messages"] = [
             {"role": "user", "content": "第一轮问题"},
             {"role": "user", "content": "第二轮追问"},
@@ -65,18 +65,36 @@ async def test_conversation_restores_all_user_and_assistant_turns(client):
                 TaskEvent(
                     task_id=task_id,
                     seq=1,
+                    kind="model_started",
+                    payload={"phase": "plan", "turn": 1, "call": 1},
+                ),
+                TaskEvent(
+                    task_id=task_id,
+                    seq=2,
+                    kind="model_started",
+                    payload={"phase": "evaluate", "turn": 1, "call": 2},
+                ),
+                TaskEvent(
+                    task_id=task_id,
+                    seq=3,
                     kind="evaluation",
                     payload={"kind": "finish", "answer": "第一轮回答", "scope_revision": 0},
                 ),
                 TaskEvent(
                     task_id=task_id,
-                    seq=2,
+                    seq=4,
                     kind="user_control",
                     payload={"action": "message", "message": "第二轮追问"},
                 ),
                 TaskEvent(
                     task_id=task_id,
-                    seq=3,
+                    seq=5,
+                    kind="model_started",
+                    payload={"phase": "evaluate", "turn": 2, "call": 1},
+                ),
+                TaskEvent(
+                    task_id=task_id,
+                    seq=6,
                     kind="evaluation",
                     payload={"kind": "finish", "answer": "第二轮回答", "scope_revision": 0},
                 ),
@@ -90,6 +108,7 @@ async def test_conversation_restores_all_user_and_assistant_turns(client):
         ("user", "第二轮追问"),
         ("assistant", "第二轮回答"),
     ]
+    assert [turn["model_calls"] for turn in turns if turn["role"] == "assistant"] == [2, 1]
 
 
 async def test_documents_and_origin_protection(client):

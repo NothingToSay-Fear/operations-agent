@@ -176,3 +176,37 @@ async def test_deepseek_invalid_decision_has_safe_repair_feedback_and_usage(
             await gateway.decide("evaluate", {"goal": "验证错误输出不绕过结构校验"})
     assert "sk-secret-fixture" not in str(error.value)
     assert error.value.usage["input_tokens"] == 100
+
+
+async def test_deepseek_plan_ignores_only_unknown_fields(settings):
+    settings = settings.model_copy(update={"llm_model": "deepseek-v4-flash"})
+    value = json.loads(json.dumps(VALUES["plan"]))
+    value["steps"][0]["status"] = "pending"
+    value["steps"][0]["criterion_ids"] = ["c1"]
+
+    async def provider(request):
+        return completion({"content": json.dumps(value)})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as client:
+        gateway = ModelGateway(settings)
+        gateway._model = model_with_transport(client)
+        result, usage = await gateway.decide("plan", {"goal": "验证多余字段归一化"})
+
+    assert result.model_dump() == VALUES["plan"]
+    assert usage["input_tokens"] == 100
+
+
+async def test_deepseek_plan_does_not_repair_missing_fields(settings):
+    settings = settings.model_copy(update={"llm_model": "deepseek-v4-flash"})
+    value = json.loads(json.dumps(VALUES["plan"]))
+    value["steps"][0].pop("done_when")
+    value["steps"][0]["status"] = "pending"
+
+    async def provider(request):
+        return completion({"content": json.dumps(value)})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as client:
+        gateway = ModelGateway(settings)
+        gateway._model = model_with_transport(client)
+        with pytest.raises(StructuredOutputError, match="missing"):
+            await gateway.decide("plan", {"goal": "验证缺失字段继续失败"})

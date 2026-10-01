@@ -22,4 +22,4 @@ export type Task = {id: string; goal: string; status: string; revision: number; 
 
 export type Artifact = {id: string; title: string; format: string; content: string; version: number; evidence_ids: string[]};
 
-export type ConversationTurn = {id: string; seq: number; role: 'user'|'assistant'; kind: 'goal'|'message'|'answer'|'question'|'notice'; content: string; created_at: number};
+export type ConversationTurn = {id: string; seq: number; role: 'user'|'assistant'; kind: 'goal'|'message'|'answer'|'question'|'notice'; content: string; created_at: number; model_calls?: number};

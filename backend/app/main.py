@@ -84,9 +84,13 @@ async def conversation_view(session, task):
         }
     ]
     assistant_sequences = set()
+    model_calls_by_response_seq = {}
+    turn_model_calls = 0
     for row in rows:
         payload = row.payload or {}
         if row.kind == "user_control" and payload.get("action") == "message":
+            # 每条用户消息开启新一轮；暂停和继续不会重置本轮用量。
+            turn_model_calls = 0
             content = str(payload.get("message", "")).strip()
             if content:
                 turns.append(
@@ -99,6 +103,15 @@ async def conversation_view(session, task):
                         "created_at": row.created_at,
                     }
                 )
+            continue
+
+        if row.kind == "model_started":
+            # call 是当前用户轮次中的递增序号；旧事件没有该字段时按事件数累加。
+            call_number = payload.get("call")
+            if isinstance(call_number, int) and call_number >= 0:
+                turn_model_calls = max(turn_model_calls, call_number)
+            else:
+                turn_model_calls += 1
             continue
 
         content = ""
@@ -128,8 +141,10 @@ async def conversation_view(session, task):
                 "kind": turn_kind,
                 "content": content,
                 "created_at": row.created_at,
+                "model_calls": turn_model_calls,
             }
         )
+        model_calls_by_response_seq[row.seq] = turn_model_calls
         assistant_sequences.add(row.seq)
 
     current_answer = str(task.state.get("answer", "")).strip()
@@ -142,6 +157,7 @@ async def conversation_view(session, task):
                 "kind": "answer" if task.status == "completed" else "notice",
                 "content": current_answer,
                 "created_at": task.updated_at,
+                "model_calls": int(task.state.get("turn_usage", {}).get("model_calls", 0)),
             }
         )
     persisted = list(
@@ -162,6 +178,7 @@ async def conversation_view(session, task):
             "kind": kind,
             "content": content,
             "created_at": row.created_at,
+            "model_calls": model_calls_by_response_seq.get(row.seq, 0),
         }
     return sorted(merged.values(), key=lambda row: (row["seq"], 0 if row["role"] == "user" else 1))
 

@@ -105,12 +105,44 @@ def output_instructions(schema, settings):
         return f"\n请仅调用结构化输出工具 {schema.__name__} 提交本阶段结果；业务工具名只能写入 Action.tool 字段。"
     return (
         f"\n本次只返回一个符合 {schema.__name__} 的 JSON 对象，不输出函数调用、Markdown 代码块或额外说明。"
+        "对象及其嵌套对象只能包含Schema定义的字段，不得增加解释、状态或其他额外字段。"
         "业务工具目录仅供决策参考；仅执行阶段可在 Action 的 tool 和 arguments 字段中描述一次业务工具调用。"
         "\n必须遵守以下 JSON Schema："
         + json.dumps(schema.model_json_schema(), ensure_ascii=False)
         + "\n以下仅为格式示例，内容不代表当前任务的正确决策："
         + json.dumps(FORMAT_EXAMPLES[schema.__name__], ensure_ascii=False)
     )
+
+
+def _validation_error(error):
+    """从LangChain包装异常中提取Pydantic校验错误，不读取原始异常正文。"""
+    cause, visited = error, set()
+    while cause is not None and id(cause) not in visited:
+        visited.add(id(cause))
+        if isinstance(cause, ValidationError):
+            return cause
+        cause = cause.__cause__
+    return None
+
+
+def _repair_extra_fields(raw, error, schema, settings):
+    """仅移除JSON模式响应中的多余字段；任何其他校验错误仍保持失败。"""
+    if not uses_json_output(settings):
+        return None
+    validation = _validation_error(error)
+    if validation is None:
+        return None
+    problems = validation.errors(include_input=False, include_url=False)
+    if not problems or any(item["type"] != "extra_forbidden" for item in problems):
+        return None
+    content = getattr(raw, "content", None)
+    if not isinstance(content, str):
+        return None
+    try:
+        value = json.loads(content)
+        return schema.model_validate(value, extra="ignore")
+    except (json.JSONDecodeError, TypeError, ValidationError):
+        return None
 
 
 def parse_structured_result(result, schema, settings):
@@ -127,35 +159,35 @@ def parse_structured_result(result, schema, settings):
         )
     if parsed is not None and not error:
         return parsed, usage
+    repaired = _repair_extra_fields(raw, error, schema, settings)
+    if repaired is not None:
+        return repaired, usage
     # 只读取校验位置和固定错误类型；异常正文可能包含完整模型响应或敏感输入。
-    cause, visited = error, set()
-    while cause is not None and id(cause) not in visited:
-        visited.add(id(cause))
-        if isinstance(cause, ValidationError):
-            fields = set(schema.model_fields)
-            for definition in schema.model_json_schema().get("$defs", {}).values():
-                fields.update(definition.get("properties", {}))
-            details = []
-            for item in cause.errors(include_input=False, include_url=False)[:6]:
-                location = (
-                    ".".join(
-                        str(part) if isinstance(part, int) or part in fields else "未知字段"
-                        for part in item["loc"]
-                    )
-                    or "对象"
+    validation = _validation_error(error)
+    if validation is not None:
+        fields = set(schema.model_fields)
+        for definition in schema.model_json_schema().get("$defs", {}).values():
+            fields.update(definition.get("properties", {}))
+        details = []
+        for item in validation.errors(include_input=False, include_url=False)[:6]:
+            location = (
+                ".".join(
+                    str(part) if isinstance(part, int) or part in fields else "未知字段"
+                    for part in item["loc"]
                 )
-                details.append(f"{location}: {item['type']}")
-                validator_hint = str(item.get("ctx", {}).get("error", ""))
-                if validator_hint in {
-                    "步骤ID重复",
-                    "成功标准ID重复",
-                    "依赖必须引用计划中排在前面的步骤，不能循环或缺失",
-                }:
-                    details[-1] += "（" + validator_hint + "）"
-            raise StructuredOutputError(
-                f"模型输出不符合 {schema.__name__}：{'；'.join(details)}。请按本阶段 Schema 修正。", usage
+                or "对象"
             )
-        cause = cause.__cause__
+            details.append(f"{location}: {item['type']}")
+            validator_hint = str(item.get("ctx", {}).get("error", ""))
+            if validator_hint in {
+                "步骤ID重复",
+                "成功标准ID重复",
+                "依赖必须引用计划中排在前面的步骤，不能循环或缺失",
+            }:
+                details[-1] += "（" + validator_hint + "）"
+        raise StructuredOutputError(
+            f"模型输出不符合 {schema.__name__}：{'；'.join(details)}。请按本阶段 Schema 修正。", usage
+        )
     raise StructuredOutputError(
         f"模型输出不符合 {schema.__name__}：未取得可解析的结构化对象，请按本阶段 Schema 返回完整结果。", usage
     )

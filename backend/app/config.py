@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     llm_model: str = ""
     llm_api_key: str = ""
     llm_base_url: str = ""
-    llm_timeout: int = 45
+    llm_timeout: int = 90
     llm_temperature: float = 0.2
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     admin_username: str = "admin"
