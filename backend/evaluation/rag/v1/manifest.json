@@ -1,0 +1,21 @@
+{
+  "version": "v1",
+  "top_k": 5,
+  "documents": [
+    {"id": "after_sales", "title": "青松系列售后政策", "path": "documents/售后政策.md"},
+    {"id": "replenishment", "title": "青松系列补货规则", "path": "documents/补货规则.csv"},
+    {"id": "product_copy", "title": "商品文案规范", "path": "documents/商品文案规范.md"},
+    {"id": "promotion", "title": "青松系列促销约束", "path": "documents/促销约束.md"},
+    {"id": "warehouse", "title": "仓库管理", "path": "documents/仓储管理.md"},
+    {"id": "logistics", "title": "青松系列配送", "path": "documents/配送时效.md"},
+    {"id": "finance", "title": "结算规范", "path": "documents/结算规范.md"},
+    {"id": "advertising", "title": "广告归因", "path": "documents/广告归因.md"},
+    {"id": "supplier", "title": "供应商交付", "path": "documents/供应商交期.md"},
+    {"id": "packaging", "title": "包装规范", "path": "documents/包装规范.md"}
+  ],
+  "quality_gates": {
+    "recall_at_5": {"minimum": 0.9},
+    "anchor_recall_at_5": {"minimum": 0.9},
+    "no_answer_false_positive_rate": {"maximum": 0.0}
+  }
+}

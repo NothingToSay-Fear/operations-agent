@@ -1,0 +1,14 @@
+{"id":"after-sales-window","question":"青松没拆封，收到后多少天还能无理由退？","expected_document_ids":["after_sales"],"expected_anchors":["签收之日起七天内"]}
+{"id":"replenishment-lead-time","question":"青松商品补货需要提前多久，起订数量是多少？","expected_document_ids":["replenishment"],"expected_anchors":["标准采购交期 | 十天"]}
+{"id":"replenishment-in-transit","question":"库存不足两周时，已经在路上的货如何处理？","expected_document_ids":["replenishment"],"expected_anchors":["扣除已确认在途数量"]}
+{"id":"copy-title","question":"青松商品标题必须写出哪些信息？","expected_document_ids":["product_copy"],"expected_anchors":["品类、净含量和口味"]}
+{"id":"copy-claim","question":"文案能不能宣称降血糖？","expected_document_ids":["product_copy"],"expected_anchors":["禁止宣称治疗疾病或降低血糖"]}
+{"id":"promotion-margin","question":"优惠券与直降叠加后，需要守住什么毛利底线？","expected_document_ids":["promotion"],"expected_anchors":["毛利率不得低于百分之二十五"]}
+{"id":"warehouse-expiry","question":"临近保质期的食品能否正常参加促销？","expected_document_ids":["warehouse"],"expected_anchors":["剩余保质期不足三十天"]}
+{"id":"logistics-shipping","question":"青松订单付款后多久发出？","expected_document_ids":["logistics"],"expected_anchors":["四十八小时内发货"]}
+{"id":"finance-gmv","question":"退款和运费在支付 GMV 里怎么计算？","expected_document_ids":["finance"],"expected_anchors":["不包含运费，也不扣退款"]}
+{"id":"advertising-attribution","question":"能把不同广告平台的归因收入直接加起来吗？","expected_document_ids":["advertising"],"expected_anchors":["不得直接相加"]}
+{"id":"supplier-lead-time","question":"白鹭供应商交货要等多久？","expected_document_ids":["supplier"],"expected_anchors":["交期为二十一天"]}
+{"id":"packaging-protection","question":"玻璃瓶需要怎样防撞包装？","expected_document_ids":["packaging"],"expected_anchors":["独立缓冲套和防撞隔板"]}
+{"id":"no-answer-orbit","question":"火星探测器轨道倾角如何计算？","expected_document_ids":[],"expected_anchors":[]}
+{"id":"no-answer-quantum","question":"请提供量子计算机纠错码的证明。","expected_document_ids":[],"expected_anchors":[]}

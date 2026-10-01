@@ -150,7 +150,15 @@ docker compose -f docker-compose.test.yml up --build --abort-on-container-exit -
 docker compose -f docker-compose.test.yml down -v
 ```
 
-报告包含逐题排名、Recall@5、MRR、BM25 与 `ts_rank_cd` 基线、无答案误命中、阶段耗时及当前任务历史隔离检查。
+评测集位于 `backend/evaluation/rag/v1/`：`documents/` 保存原始资料，`cases.jsonl` 为问题、目标资料和文本锚点标注，`manifest.json` 定义 Top-K 与质量门槛。评测使用与正式上传一致的版本化文件解析、分段和索引流程；报告包含逐题文档命中、文本锚点命中、Recall@5、MRR、BM25 与 `ts_rank_cd` 基线、无答案误命中、阶段耗时及当前任务历史隔离检查。
+
+人工核对一份通过的报告后，可将它写为回归基线；后续评测会对比 `baseline.json` 中受门槛约束的指标：
+
+```powershell
+docker compose -f docker-compose.test.yml run --rm rag-evaluation python -m app.rag_evaluation --write-baseline
+```
+
+新增评测资料时，提交脱敏文件与对应 `cases.jsonl` 标注。临时资料可放到被 Git 忽略的 `backend/evaluation/rag/local/`，并通过 `--dataset /app/evaluation/rag/local` 在隔离容器中运行。
 
 ## 测试与评测
 

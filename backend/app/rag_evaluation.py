@@ -1,4 +1,6 @@
-"""真实检索模型的隔离评测，输出逐题排名、无答案误命中和阶段耗时。"""
+"""在隔离 PostgreSQL 中执行版本化 RAG 评测并输出可追溯报告。"""
+
+from __future__ import annotations
 
 import argparse
 import asyncio
@@ -19,42 +21,24 @@ from app.evaluation_database import (
     reset_application_database,
     reset_commerce_database,
 )
+from app.extension_models import BackgroundJob, DocumentScope, HistoryUnit
 from app.models import Document, Task, User
-from app.extension_models import HistoryUnit
+from app.rag_evaluation_dataset import (
+    RagEvaluationCase,
+    RagEvaluationDataset,
+    load_baseline,
+    load_rag_evaluation_dataset,
+    write_baseline,
+)
 from app.seed import seed_database
 
 
-DOCUMENTS = {
-    "售后": "# 青松系列售后政策\n## 无理由退货\n青松系列未拆封商品自签收之日起七天内可申请无理由退货。已拆封食品不支持无理由退货。质量问题须保留批次号和照片。",
-    "补货": "# 青松系列补货规则\n库存覆盖天数低于十四天时启动补货评估。标准采购交期为十天，最小订货量为二十件。计算时应扣除已确认的在途数量，隔离品不得计入可用库存。",
-    "品牌": "# 文案规范\n青松系列标题必须包含品类、净含量和口味。没有检测依据时，禁止宣称治疗疾病或降低血糖。商品卖点应依据可验证属性，不得编造功效。",
-    "促销": "# 青松系列促销约束\n活动折扣后商品毛利率不得低于百分之二十五。优惠券和直降可以叠加，但须合并计算实际到手价与毛利；发货运费另行评估。",
-    "仓储": "# 仓库管理\n食品采用先到期先出。剩余保质期不足三十天的商品应单独隔离并审核，不直接参加常规促销。仓库盘点差异由仓库负责人核查。",
-    "物流": "# 青松系列配送\n常规订单在付款后四十八小时内发货。偏远地区配送时效为五至七天。节假日延迟须在活动方案中说明。",
-    "财务": "# 结算规范\n支付商品 GMV 不包含运费，也不扣退款。退款以实际到账日统计。周期访客应按访客标识去重，不能直接累加每天的访客数。",
-    "投放": "# 广告归因\n广告平台展示的归因收入仅供渠道参考。多个渠道同时声称归因同一订单时，不得直接相加作为实际商品成交额。",
-    "供应商": "# 供应商交期\n白鹭供应商提供的交期为二十一天。活动前需要向供应商确认产能，在未确认之前不得把预计到货当成已经到货。",
-    "包装": "# 包装规范\n玻璃瓶发货使用独立缓冲套和防撞隔板。运输破损须保留外包装与商品照片。包装材料重量不计入商品净含量。",
-}
-CASES = [
-    ("青松没拆封，收到后多少天还能无理由退？", "售后"),
-    ("青松商品补货需要提前多久，起订数量是多少？", "补货"),
-    ("库存不足两周时如何处理已经在路上的货？", "补货"),
-    ("青松商品标题必须写出哪些信息？", "品牌"),
-    ("文案能不能宣称降血糖？", "品牌"),
-    ("优惠券与直降叠加后需要守住什么毛利底线？", "促销"),
-    ("临近保质期的食品能否正常参加促销？", "仓储"),
-    ("青松订单付款后多久发出？", "物流"),
-    ("退款和运费在支付GMV里怎么计算？", "财务"),
-    ("能把不同广告平台的归因收入直接加起来吗？", "投放"),
-    ("白鹭供应商交货要等多少天？", "供应商"),
-    ("玻璃瓶需要怎样防撞包装？", "包装"),
-    ("火星探测器轨道倾角如何计算？", None),
-    ("请提供量子计算机纠错码的证明。", None),
-]
+DEFAULT_DATASET = Path(__file__).resolve().parents[1] / "evaluation" / "rag" / "v1"
 
 
-async def run(directory):
+async def run(directory: Path, dataset_path: Path = DEFAULT_DATASET) -> dict:
+    """运行真实文件上传、结构化索引和混合检索评测。"""
+    dataset = load_rag_evaluation_dataset(dataset_path)
     settings = Settings()
     if not settings.embedding_model_path or not settings.reranker_model_path:
         raise RuntimeError("评测要求配置真实向量与精排模型目录")
@@ -78,7 +62,6 @@ async def run(directory):
     )
     await grant_commerce_read_access(commerce_admin_url, commerce_reader_url)
     db = Database(settings)
-    results = []
     try:
         model_health = await retrieval.health(settings)
         if model_health["embedding"] != "ready" or model_health["reranker"] != "ready":
@@ -87,134 +70,291 @@ async def run(directory):
             user = User(username="rag-evaluation-" + str(time.time_ns()), password_hash="不可登录")
             session.add(user)
             await session.flush()
-            ids = {}
-            for label, content in DOCUMENTS.items():
-                doc = Document(user_id=user.id, title=label, content=content)
-                session.add(doc)
-                await session.flush()
-                await knowledge.index_document(session, doc, settings)
-                ids[label] = doc.id
+            document_ids = await _index_dataset_documents(session, user, dataset, settings)
             await session.commit()
             eligible_rows = [
                 knowledge_service.as_row(*row)
                 for row in (await session.execute(knowledge_service.eligible(user.id))).all()
             ]
             eligible_by_segment = {row["id"]: row for row in eligible_rows}
-            for query, label in CASES:
-                async with db.read_sessions() as commerce:
-                    result = await knowledge.search(session, commerce, user.id, query, settings, 5)
-                    sparse = await knowledge.search(
-                        session,
-                        commerce,
-                        user.id,
-                        query,
-                        settings.model_copy(update={"embedding_model_path": "", "reranker_model_path": ""}),
-                        5,
-                    )
-                expected = ids.get(label)
-                hits = [r["document_id"] for r in result["rows"]]
-                sparse_hits = [r["document_id"] for r in sparse["rows"]]
-                bm25_hits = [
-                    eligible_by_segment[segment_id]["document_id"]
-                    for segment_id in retrieval.lexical_rank(query, eligible_rows, limit=5)
-                ]
-                rank = hits.index(expected) + 1 if expected in hits else None
-                results.append(
-                    {
-                        "query": query,
-                        "expected": label,
-                        "rank": rank,
-                        "bm25_rank": bm25_hits.index(expected) + 1 if expected in bm25_hits else None,
-                        "ts_rank_cd_rank": sparse_hits.index(expected) + 1
-                        if expected in sparse_hits
-                        else None,
-                        "no_answer_false_positive": bool(hits) if label is None else None,
-                        "bm25_no_answer_false_positive": bool(bm25_hits) if label is None else None,
-                        "ts_rank_cd_no_answer_false_positive": bool(sparse_hits) if label is None else None,
-                        "mode": result["retrieval"],
-                        "elapsed_ms": result["elapsed_ms"],
-                        "stage_ms": result["stage_ms"],
-                        "trace": result["trace"],
-                    }
+            results = [
+                await _evaluate_case(
+                    session,
+                    db,
+                    user.id,
+                    case,
+                    document_ids,
+                    eligible_by_segment,
+                    settings,
+                    dataset.top_k,
                 )
-            first = Task(user_id=user.id, goal="青松历史", state=initial_state("青松历史", settings))
-            second = Task(user_id=user.id, goal="白鹭历史", state=initial_state("白鹭历史", settings))
-            session.add_all([first, second])
-            await session.flush()
-            await memory.append_history(
-                session, first, 0, "user", {"content": "青松独立历史，库存优先考虑交期"}, settings
-            )
-            await memory.append_history(
-                session, second, 0, "user", {"content": "白鹭独立历史，库存优先考虑交期"}, settings
-            )
+                for case in dataset.cases
+            ]
+            history_isolation = await _verify_history_isolation(session, user.id, settings)
             await session.commit()
-            history_units = list(
-                await session.scalars(
-                    select(HistoryUnit).where(HistoryUnit.task_id.in_([first.id, second.id]))
-                )
-            )
-            history_vectors = await retrieval.encode([unit.content for unit in history_units], settings)
-            for unit, vector in zip(history_units, history_vectors):
-                unit.embedding, unit.model_id = vector, settings.embedding_model_id
-            await session.commit()
-            history = await memory.history_search(session, first, "库存交期", settings)
-            assert history["rows"] and all(row["task_id"] == first.id for row in history["rows"])
-            assert "白鹭" not in str(history)
-        answered = [r for r in results if r["expected"]]
-        recall = sum(r["rank"] is not None for r in answered) / len(answered)
-        mrr = sum(1 / r["rank"] if r["rank"] else 0 for r in answered) / len(answered)
-        bm25_recall = sum(r["bm25_rank"] is not None for r in answered) / len(answered)
-        bm25_mrr = sum(1 / r["bm25_rank"] if r["bm25_rank"] else 0 for r in answered) / len(answered)
-        ts_rank_cd_recall = sum(r["ts_rank_cd_rank"] is not None for r in answered) / len(answered)
-        ts_rank_cd_mrr = sum(1 / r["ts_rank_cd_rank"] if r["ts_rank_cd_rank"] else 0 for r in answered) / len(
-            answered
-        )
-        negatives = [r for r in results if not r["expected"]]
+        metrics = _aggregate_metrics(results)
+        metrics["history_isolation"] = float(history_isolation)
+        gate_failures = _quality_gate_failures(metrics, dataset)
+        baseline_failures = _baseline_regression_failures(metrics, dataset)
         report = {
             "database": "PostgreSQL",
+            "dataset": {
+                "version": dataset.version,
+                "path": str(dataset.root),
+                "document_count": len(dataset.documents),
+                "case_count": len(dataset.cases),
+                "top_k": dataset.top_k,
+            },
             "models": model_health,
+            "metrics": metrics,
+            "quality_gates": dataset.quality_gates,
+            "gate_failures": gate_failures,
+            "baseline_failures": baseline_failures,
             "cases": results,
-            "recall_at_5": recall,
-            "mrr": mrr,
-            "bm25_recall_at_5": bm25_recall,
-            "bm25_mrr": bm25_mrr,
-            "bm25_no_answer_false_positive_rate": sum(r["bm25_no_answer_false_positive"] for r in negatives)
-            / len(negatives),
-            "ts_rank_cd_recall_at_5": ts_rank_cd_recall,
-            "ts_rank_cd_mrr": ts_rank_cd_mrr,
-            "ts_rank_cd_no_answer_false_positive_rate": sum(
-                r["ts_rank_cd_no_answer_false_positive"] for r in negatives
-            )
-            / len(negatives),
-            "no_answer_false_positive_rate": sum(r["no_answer_false_positive"] for r in negatives)
-            / len(negatives),
-            "history_isolation": True,
-            "passed": recall >= 0.9 and all(not r["no_answer_false_positive"] for r in negatives),
+            "passed": not gate_failures and not baseline_failures and history_isolation,
         }
-        (directory / "report.json").write_text(
-            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        (directory / "report.md").write_text(
-            f"# 真实 RAG 评测\n\n数据库：{report['database']}\n\n"
-            f"混合检索 Recall@5：{recall:.3f}；MRR：{mrr:.3f}。\n\n"
-            f"BM25 Recall@5：{bm25_recall:.3f}；MRR：{bm25_mrr:.3f}。\n\n"
-            + f"ts_rank_cd Recall@5：{ts_rank_cd_recall:.3f}；MRR：{ts_rank_cd_mrr:.3f}。\n\n"
-            + f"无答案误命中率：{report['no_answer_false_positive_rate']:.3f}\n\n"
-            f"通过：{report['passed']}。逐题排名与轨迹见 report.json。\n",
-            encoding="utf-8",
-        )
-        print(json.dumps({k: v for k, v in report.items() if k != "cases"}, ensure_ascii=False))
-        return report["passed"]
+        _write_report(directory, report)
+        print(json.dumps({key: value for key, value in report.items() if key != "cases"}, ensure_ascii=False))
+        return report
     finally:
         await db.close()
 
 
-def main():
-    parser = argparse.ArgumentParser(description="真实 RAG 与任务历史隔离评测")
+async def _index_dataset_documents(
+    session, user: User, dataset: RagEvaluationDataset, settings: Settings
+) -> dict[str, str]:
+    """复用正式上传后的版本化索引流程，避免评测绕过文件解析。"""
+    document_ids: dict[str, str] = {}
+    for source in dataset.documents:
+        document = Document(user_id=user.id, title=source.title, content="")
+        session.add(document)
+        await session.flush()
+        session.add(DocumentScope(document_id=document.id))
+        version = await knowledge.enqueue_version(
+            session, document, source.path.name, source.path.read_bytes()
+        )
+        prepared = await knowledge.prepare_index(version, settings)
+        await knowledge.publish_index(session, version, prepared)
+        job = await session.scalar(select(BackgroundJob).where(BackgroundJob.key == "index:" + version.id))
+        if job is None:
+            raise RuntimeError(f"评测资料缺少索引任务：{source.id}")
+        job.status, job.progress, job.error = "completed", 100, prepared["error"]
+        document_ids[source.id] = document.id
+    return document_ids
+
+
+async def _evaluate_case(
+    session,
+    db: Database,
+    user_id: str,
+    case: RagEvaluationCase,
+    document_ids: dict[str, str],
+    eligible_by_segment: dict[str, dict],
+    settings: Settings,
+    top_k: int,
+) -> dict:
+    """记录混合、BM25 与 PostgreSQL 全文三条路径的逐题结果。"""
+    async with db.read_sessions() as commerce:
+        result = await knowledge.search(session, commerce, user_id, case.question, settings, top_k)
+        sparse = await knowledge.search(
+            session,
+            commerce,
+            user_id,
+            case.question,
+            settings.model_copy(update={"embedding_model_path": "", "reranker_model_path": ""}),
+            top_k,
+        )
+    expected_ids = {document_ids[item] for item in case.expected_document_ids}
+    rows = result["rows"]
+    hits = [row["document_id"] for row in rows]
+    sparse_hits = [row["document_id"] for row in sparse["rows"]]
+    bm25_hits = [
+        eligible_by_segment[segment_id]["document_id"]
+        for segment_id in retrieval.lexical_rank(
+            case.question, list(eligible_by_segment.values()), limit=top_k
+        )
+    ]
+    first_rank = min(
+        (index + 1 for index, identifier in enumerate(hits) if identifier in expected_ids), default=None
+    )
+    anchor_matches = {
+        anchor: any(row["document_id"] in expected_ids and anchor in row["text"] for row in rows)
+        for anchor in case.expected_anchors
+    }
+    return {
+        "id": case.id,
+        "question": case.question,
+        "expected_document_ids": list(case.expected_document_ids),
+        "expected_anchors": list(case.expected_anchors),
+        "rank": first_rank,
+        "bm25_rank": min(
+            (index + 1 for index, identifier in enumerate(bm25_hits) if identifier in expected_ids),
+            default=None,
+        ),
+        "ts_rank_cd_rank": min(
+            (index + 1 for index, identifier in enumerate(sparse_hits) if identifier in expected_ids),
+            default=None,
+        ),
+        "document_ok": expected_ids.issubset(set(hits)) if expected_ids else not hits,
+        "anchor_matches": anchor_matches,
+        "anchor_ok": all(anchor_matches.values()),
+        "no_answer_false_positive": bool(hits) if not expected_ids else None,
+        "bm25_no_answer_false_positive": bool(bm25_hits) if not expected_ids else None,
+        "ts_rank_cd_no_answer_false_positive": bool(sparse_hits) if not expected_ids else None,
+        "mode": result["retrieval"],
+        "elapsed_ms": result["elapsed_ms"],
+        "stage_ms": result["stage_ms"],
+        "trace": result["trace"],
+    }
+
+
+async def _verify_history_isolation(session, user_id: str, settings: Settings) -> bool:
+    """保留任务内历史召回隔离校验，防止 RAG 评测掩盖越权召回。"""
+    first = Task(user_id=user_id, goal="青松历史", state=initial_state("青松历史", settings))
+    second = Task(user_id=user_id, goal="白鹭历史", state=initial_state("白鹭历史", settings))
+    session.add_all([first, second])
+    await session.flush()
+    await memory.append_history(
+        session, first, 0, "user", {"content": "青松独立历史，库存优先考虑交期"}, settings
+    )
+    await memory.append_history(
+        session, second, 0, "user", {"content": "白鹭独立历史，库存优先考虑交期"}, settings
+    )
+    await session.flush()
+    units = list(
+        await session.scalars(select(HistoryUnit).where(HistoryUnit.task_id.in_([first.id, second.id])))
+    )
+    vectors = await retrieval.encode([unit.content for unit in units], settings)
+    for unit, vector in zip(units, vectors, strict=True):
+        unit.embedding, unit.model_id = vector, settings.embedding_model_id
+    history = await memory.history_search(session, first, "库存交期", settings)
+    return (
+        bool(history["rows"])
+        and all(row["task_id"] == first.id for row in history["rows"])
+        and "白鹭" not in str(history)
+    )
+
+
+def _aggregate_metrics(results: list[dict]) -> dict[str, float]:
+    answered = [result for result in results if result["expected_document_ids"]]
+    negatives = [result for result in results if not result["expected_document_ids"]]
+    anchors = [matched for result in answered for matched in result["anchor_matches"].values()]
+    return {
+        "recall_at_5": _mean(result["rank"] is not None for result in answered),
+        "mrr": _mean(1 / result["rank"] if result["rank"] else 0 for result in answered),
+        "anchor_recall_at_5": _mean(anchors),
+        "bm25_recall_at_5": _mean(result["bm25_rank"] is not None for result in answered),
+        "bm25_mrr": _mean(1 / result["bm25_rank"] if result["bm25_rank"] else 0 for result in answered),
+        "bm25_no_answer_false_positive_rate": _mean(
+            result["bm25_no_answer_false_positive"] for result in negatives
+        ),
+        "ts_rank_cd_recall_at_5": _mean(result["ts_rank_cd_rank"] is not None for result in answered),
+        "ts_rank_cd_mrr": _mean(
+            1 / result["ts_rank_cd_rank"] if result["ts_rank_cd_rank"] else 0 for result in answered
+        ),
+        "ts_rank_cd_no_answer_false_positive_rate": _mean(
+            result["ts_rank_cd_no_answer_false_positive"] for result in negatives
+        ),
+        "no_answer_false_positive_rate": _mean(result["no_answer_false_positive"] for result in negatives),
+        "p95_elapsed_ms": _percentile([result["elapsed_ms"] for result in results], 0.95),
+    }
+
+
+def _quality_gate_failures(metrics: dict[str, float], dataset: RagEvaluationDataset) -> list[str]:
+    failures: list[str] = []
+    for name, gate in dataset.quality_gates.items():
+        value = metrics.get(name)
+        if value is None:
+            failures.append(f"缺少质量指标：{name}")
+            continue
+        if "minimum" in gate and value < gate["minimum"]:
+            failures.append(f"{name}={value:.4f} 低于最低门槛 {gate['minimum']:.4f}")
+        if "maximum" in gate and value > gate["maximum"]:
+            failures.append(f"{name}={value:.4f} 高于最高门槛 {gate['maximum']:.4f}")
+    return failures
+
+
+def _baseline_regression_failures(metrics: dict[str, float], dataset: RagEvaluationDataset) -> list[str]:
+    baseline = load_baseline(dataset)
+    if baseline is None:
+        return []
+    baseline_metrics, tolerance = baseline
+    failures: list[str] = []
+    for name, gate in dataset.quality_gates.items():
+        if name not in baseline_metrics or name not in metrics:
+            continue
+        value, previous = metrics[name], baseline_metrics[name]
+        if "minimum" in gate and value < previous - tolerance:
+            failures.append(f"{name}={value:.4f} 相比基线 {previous:.4f} 下降超过 {tolerance:.4f}")
+        if "maximum" in gate and value > previous + tolerance:
+            failures.append(f"{name}={value:.4f} 相比基线 {previous:.4f} 上升超过 {tolerance:.4f}")
+    return failures
+
+
+def _write_report(directory: Path, report: dict) -> None:
+    (directory / "report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    metrics = report["metrics"]
+    failures = [*report["gate_failures"], *report["baseline_failures"]]
+    failure_lines = [f"- {failure}" for failure in failures] or ["- 无"]
+    lines = [
+        "# 真实 RAG 评测",
+        "",
+        f"- 数据集：`{report['dataset']['version']}`",
+        f"- 资料数：{report['dataset']['document_count']}；问题数：{report['dataset']['case_count']}；Top-K：{report['dataset']['top_k']}",
+        f"- 数据库：{report['database']}",
+        f"- 结果：{'通过' if report['passed'] else '未通过'}",
+        "",
+        "## 汇总指标",
+        "",
+        "| 指标 | 数值 |",
+        "| --- | ---: |",
+        *[f"| {name} | {value:.4f} |" for name, value in metrics.items()],
+        "",
+        "## 未通过项",
+        "",
+        *failure_lines,
+        "",
+        "## 逐题结果",
+        "",
+        "| ID | 文档命中 | 文本锚点 | 排名 |",
+        "| --- | --- | --- | ---: |",
+        *[
+            f"| {item['id']} | {'是' if item['document_ok'] else '否'} | {'是' if item['anchor_ok'] else '否'} | {item['rank'] or '-'} |"
+            for item in report["cases"]
+        ],
+        "",
+    ]
+    (directory / "report.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def _mean(values) -> float:
+    items = list(values)
+    return sum(items) / len(items) if items else 0.0
+
+
+def _percentile(values: list[int], percentile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = min(len(ordered) - 1, max(0, round((len(ordered) - 1) * percentile)))
+    return float(ordered[index])
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="真实文件上传、混合检索与文本锚点隔离评测")
+    parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET, help="版本化评测集目录")
     parser.add_argument("--output", default="evaluation-reports/rag-" + str(time.time_ns()))
+    parser.add_argument("--write-baseline", action="store_true", help="将通过门槛的本次结果写为基线")
     args = parser.parse_args()
-    passed = asyncio.run(run(Path(args.output).resolve()))
-    raise SystemExit(0 if passed else 1)
+    report = asyncio.run(run(Path(args.output).resolve(), args.dataset))
+    if args.write_baseline:
+        if not report["passed"]:
+            raise SystemExit("评测未通过，拒绝写入基线")
+        dataset = load_rag_evaluation_dataset(args.dataset)
+        print(f"已写入基线：{write_baseline(dataset, report['metrics'])}")
+    raise SystemExit(0 if report["passed"] else 1)
 
 
 if __name__ == "__main__":
