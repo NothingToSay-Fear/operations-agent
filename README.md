@@ -83,9 +83,9 @@ docker compose up -d --build
 docker compose ps
 ```
 
-访问 <http://localhost:5173>。启动顺序为数据库初始化 → 模拟数据生成/对账 → Alembic 迁移与 API → Nginx 前端及独立维护 Worker。模型位于根目录 `models/` 并挂载到容器；若已有完整权重，可跳过下载命令。数据库不暴露宿主端口；应用默认仅绑定本机。
+访问 <http://localhost:5173>。数据库查看页为 <http://localhost:8081>：服务器填写 `db`；查看业务数据时选择 `commerce` 数据库并使用 `commerce_reader` 账号。启动顺序为数据库初始化 → 模拟数据生成/对账 → Alembic 迁移与 API → Nginx 前端及独立维护 Worker。模型位于根目录 `models/` 并挂载到容器；若已有完整权重，可跳过下载命令。数据库不暴露宿主端口；应用和 Adminer 默认仅绑定本机。
 
-宿主端口冲突时，在 `.env` 中修改 `API_PORT`、`FRONTEND_PORT`，并同步 `CORS_ORIGINS`。后台任务独立于浏览器连接；刷新或断线不会取消任务。
+宿主端口冲突时，在 `.env` 中修改 `API_PORT`、`FRONTEND_PORT`、`ADMINER_PORT`，并同步 `CORS_ORIGINS`。后台任务独立于浏览器连接；刷新或断线不会取消任务。
 
 ```powershell
 docker compose logs --tail 100 api

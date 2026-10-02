@@ -74,6 +74,13 @@ services:
     ports: ["127.0.0.1:${FRONTEND_PORT:-5173}:80"]
     depends_on:
       api: {condition: service_healthy}
+  adminer:
+    image: adminer:4.8.1
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    ports: ["127.0.0.1:${ADMINER_PORT:-8081}:8080"]
+    depends_on:
+      db: {condition: service_healthy}
   worker:
     build: ./backend
     command: [python, -m, app.background]
