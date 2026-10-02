@@ -11,7 +11,7 @@ import time
 
 from sqlalchemy import select
 
-from app import knowledge, knowledge_service, memory, retrieval
+from app import knowledge, memory, retrieval
 from app.agent.runtime import initial_state
 from app.config import Settings
 from app.db import Database
@@ -72,11 +72,6 @@ async def run(directory: Path, dataset_path: Path = DEFAULT_DATASET) -> dict:
             await session.flush()
             document_ids = await _index_dataset_documents(session, user, dataset, settings)
             await session.commit()
-            eligible_rows = [
-                knowledge_service.as_row(*row)
-                for row in (await session.execute(knowledge_service.eligible(user.id))).all()
-            ]
-            eligible_by_segment = {row["id"]: row for row in eligible_rows}
             results = [
                 await _evaluate_case(
                     session,
@@ -84,7 +79,6 @@ async def run(directory: Path, dataset_path: Path = DEFAULT_DATASET) -> dict:
                     user.id,
                     case,
                     document_ids,
-                    eligible_by_segment,
                     settings,
                     dataset.top_k,
                 )
@@ -149,11 +143,10 @@ async def _evaluate_case(
     user_id: str,
     case: RagEvaluationCase,
     document_ids: dict[str, str],
-    eligible_by_segment: dict[str, dict],
     settings: Settings,
     top_k: int,
 ) -> dict:
-    """记录混合、BM25 与 PostgreSQL 全文三条路径的逐题结果。"""
+    """记录混合检索与 PostgreSQL 全文检索两条路径的逐题结果。"""
     async with db.read_sessions() as commerce:
         result = await knowledge.search(session, commerce, user_id, case.question, settings, top_k)
         sparse = await knowledge.search(
@@ -168,12 +161,6 @@ async def _evaluate_case(
     rows = result["rows"]
     hits = [row["document_id"] for row in rows]
     sparse_hits = [row["document_id"] for row in sparse["rows"]]
-    bm25_hits = [
-        eligible_by_segment[segment_id]["document_id"]
-        for segment_id in retrieval.lexical_rank(
-            case.question, list(eligible_by_segment.values()), limit=top_k
-        )
-    ]
     first_rank = min(
         (index + 1 for index, identifier in enumerate(hits) if identifier in expected_ids), default=None
     )
@@ -187,10 +174,6 @@ async def _evaluate_case(
         "expected_document_ids": list(case.expected_document_ids),
         "expected_anchors": list(case.expected_anchors),
         "rank": first_rank,
-        "bm25_rank": min(
-            (index + 1 for index, identifier in enumerate(bm25_hits) if identifier in expected_ids),
-            default=None,
-        ),
         "ts_rank_cd_rank": min(
             (index + 1 for index, identifier in enumerate(sparse_hits) if identifier in expected_ids),
             default=None,
@@ -199,7 +182,6 @@ async def _evaluate_case(
         "anchor_matches": anchor_matches,
         "anchor_ok": all(anchor_matches.values()),
         "no_answer_false_positive": bool(hits) if not expected_ids else None,
-        "bm25_no_answer_false_positive": bool(bm25_hits) if not expected_ids else None,
         "ts_rank_cd_no_answer_false_positive": bool(sparse_hits) if not expected_ids else None,
         "mode": result["retrieval"],
         "elapsed_ms": result["elapsed_ms"],
@@ -243,11 +225,6 @@ def _aggregate_metrics(results: list[dict]) -> dict[str, float]:
         "recall_at_5": _mean(result["rank"] is not None for result in answered),
         "mrr": _mean(1 / result["rank"] if result["rank"] else 0 for result in answered),
         "anchor_recall_at_5": _mean(anchors),
-        "bm25_recall_at_5": _mean(result["bm25_rank"] is not None for result in answered),
-        "bm25_mrr": _mean(1 / result["bm25_rank"] if result["bm25_rank"] else 0 for result in answered),
-        "bm25_no_answer_false_positive_rate": _mean(
-            result["bm25_no_answer_false_positive"] for result in negatives
-        ),
         "ts_rank_cd_recall_at_5": _mean(result["ts_rank_cd_rank"] is not None for result in answered),
         "ts_rank_cd_mrr": _mean(
             1 / result["ts_rank_cd_rank"] if result["ts_rank_cd_rank"] else 0 for result in answered
