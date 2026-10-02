@@ -168,6 +168,12 @@ async def _evaluate_case(
         anchor: any(row["document_id"] in expected_ids and anchor in row["text"] for row in rows)
         for anchor in case.expected_anchors
     }
+    ts_rank_cd_anchor_matches = {
+        anchor: any(
+            row["document_id"] in expected_ids and anchor in row["text"] for row in sparse["rows"]
+        )
+        for anchor in case.expected_anchors
+    }
     return {
         "id": case.id,
         "question": case.question,
@@ -181,6 +187,8 @@ async def _evaluate_case(
         "document_ok": expected_ids.issubset(set(hits)) if expected_ids else not hits,
         "anchor_matches": anchor_matches,
         "anchor_ok": all(anchor_matches.values()),
+        "ts_rank_cd_anchor_matches": ts_rank_cd_anchor_matches,
+        "ts_rank_cd_anchor_ok": all(ts_rank_cd_anchor_matches.values()),
         "no_answer_false_positive": bool(hits) if not expected_ids else None,
         "ts_rank_cd_no_answer_false_positive": bool(sparse_hits) if not expected_ids else None,
         "mode": result["retrieval"],
@@ -221,11 +229,15 @@ def _aggregate_metrics(results: list[dict]) -> dict[str, float]:
     answered = [result for result in results if result["expected_document_ids"]]
     negatives = [result for result in results if not result["expected_document_ids"]]
     anchors = [matched for result in answered for matched in result["anchor_matches"].values()]
+    ts_rank_cd_anchors = [
+        matched for result in answered for matched in result["ts_rank_cd_anchor_matches"].values()
+    ]
     return {
-        "recall_at_5": _mean(result["rank"] is not None for result in answered),
+        "document_recall_at_5": _mean(result["rank"] is not None for result in answered),
         "mrr": _mean(1 / result["rank"] if result["rank"] else 0 for result in answered),
         "anchor_recall_at_5": _mean(anchors),
-        "ts_rank_cd_recall_at_5": _mean(result["ts_rank_cd_rank"] is not None for result in answered),
+        "ts_rank_cd_document_recall_at_5": _mean(result["ts_rank_cd_rank"] is not None for result in answered),
+        "ts_rank_cd_anchor_recall_at_5": _mean(ts_rank_cd_anchors),
         "ts_rank_cd_mrr": _mean(
             1 / result["ts_rank_cd_rank"] if result["ts_rank_cd_rank"] else 0 for result in answered
         ),
