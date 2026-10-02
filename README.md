@@ -6,7 +6,7 @@
 
 ## 当前能力
 
-- 模型驱动的 Planner / Executor / Tools / Evaluator 显式 LangGraph 节点，没有按电商意图拼装计划的代码分支。
+- 模型驱动的 Planner / Executor / Tools / Evaluator 显式 LangGraph 节点；库存补货和活动-成本-库存组合决策使用受控领域快速路径，服务端先完成全量聚合，再由模型交付结论。
 - Executor 可在一次结构化决策中选择最多 6 个相互独立的只读工具并行执行；写入成果和记忆候选仍保持单次、可审计执行。
 - 计划版本、步骤完成记录、工具证据、运行预算、用户干预及任务恢复。
 - 订单、商品、退款、库存、分批履约、渠道、广告、活动与知识资料工具。
@@ -135,6 +135,8 @@ COMMERCE_DATABASE_URL=sqlite+aiosqlite:///file:D:/project/operations-agent/backe
 摘要和候选提取使用每任务最多 6 次的独立维护预算，并继续计入累计 Token 和成本；它们不占用用户新一轮追问的交互预算。查询扩展属于当前交互轮次，计入该轮模型预算。
 
 运行图按 `guard → plan / execute / tools / evaluate` 显式路由。中间计划步骤完成后直接进入下一个满足依赖的步骤，只在计划结束、关键失败、重规划或预算收尾时执行全局评估，避免每个小步骤额外消耗一次模型调用。数据库任务状态仍是唯一持久化执行来源，防止与框架 checkpoint 形成双重真相。
+
+当问题同时涉及活动、成本或毛利、库存或在途，且未要求完整 SKU 导出时，运行时会调用 `build_promotion_snapshot`。该工具在 PostgreSQL 侧计算活动参与 SKU 的折后毛利、库存覆盖和可靠在途，完整明细保留为 Evidence，模型只接收推荐商品、排除原因、约束和执行前核验项；用户要求保存方案时，系统随后只允许保存成果并进入最终评估。
 
 测试、RAG 评测和真实模型评测均使用独立 PostgreSQL/pgvector 容器，不使用 SQLite 作为验收环境：
 

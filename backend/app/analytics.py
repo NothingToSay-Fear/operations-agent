@@ -1,8 +1,8 @@
 """只读的结构化经营查询与库存风险汇总。"""
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_FLOOR, Decimal
 from math import ceil
 from typing import Literal
 
@@ -74,6 +74,18 @@ class InventoryQuery(StrictModel):
     demand_days: int = Field(default=14, ge=1, le=90)
     limit: int = Field(default=30, ge=1, le=100)
     include_movements: bool = False
+
+
+class PromotionSnapshotQuery(StrictModel):
+    """促销决策的受控输入，避免由模型逐页拼接活动、成本和库存数据。"""
+
+    campaign_id: str | None = Field(default=None, min_length=1, max_length=32)
+    as_of: date | None = None
+    planning_days: int = Field(default=7, ge=1, le=31)
+    demand_history_days: int = Field(default=14, ge=7, le=90)
+    minimum_margin_rate: float = Field(default=0.18, ge=0, le=0.9)
+    minimum_coverage_days: int = Field(default=14, ge=1, le=90)
+    limit: int = Field(default=10, ge=1, le=20)
 
 
 def inventory_risk_summary(rows: list[dict], as_of: date, demand_days: int, maximum_rows: int = 10) -> dict:
@@ -410,6 +422,230 @@ async def get_products(session, q: ProductQuery):
         ],
         "has_more": len(rows) > q.limit,
         "offset": q.offset,
+        "simulated": True,
+        "currency": "CNY",
+    }
+
+
+async def build_promotion_snapshot(session, q: PromotionSnapshotQuery):
+    """在服务端汇总促销决策所需事实，并保留完整 SKU 明细供证据追溯。"""
+
+    as_of, _ = await cutoff(session, q.as_of)
+    if q.campaign_id:
+        campaign = await session.get(Campaign, q.campaign_id)
+    else:
+        active_statement = (
+            select(Campaign)
+            .where(Campaign.start_date <= as_of, Campaign.end_date >= as_of)
+            .order_by(Campaign.end_date.desc(), Campaign.id)
+        )
+        campaign = await session.scalar(active_statement)
+        if campaign is None:
+            latest_statement = (
+                select(Campaign).where(Campaign.end_date <= as_of).order_by(Campaign.end_date.desc(), Campaign.id)
+            )
+            campaign = await session.scalar(latest_statement)
+    if campaign is None:
+        raise ValueError("当前数据截止日期前没有可用的活动规则")
+
+    product_ids = [str(product_id) for product_id in campaign.product_ids]
+    if not product_ids:
+        raise ValueError("活动未配置参与商品，无法生成促销决策摘要")
+    products = {
+        product.id: product
+        for product in (
+            await session.scalars(select(Product).where(Product.id.in_(product_ids)).order_by(Product.id))
+        ).all()
+    }
+    reserved = InventoryMovement.kind.in_(["reserve", "release"])
+    position_statement = (
+        select(
+            InventoryMovement.product_id,
+            func.sum(case((~reserved, InventoryMovement.quantity), else_=0)).label("physical"),
+            func.sum(case((reserved, InventoryMovement.quantity), else_=0)).label("reserved"),
+        )
+        .where(InventoryMovement.date <= as_of, InventoryMovement.product_id.in_(product_ids))
+        .group_by(InventoryMovement.product_id)
+    )
+    positions = {
+        row["product_id"]: row
+        for row in (await session.execute(position_statement)).mappings().all()
+    }
+    demand_start = as_of - timedelta(days=q.demand_history_days - 1)
+    demand_statement = (
+        select(OrderLine.product_id, func.sum(OrderLine.quantity).label("units"))
+        .join(Order)
+        .where(
+            Order.paid_date.between(demand_start, as_of),
+            Order.collected_date <= as_of,
+            OrderLine.product_id.in_(product_ids),
+        )
+        .group_by(OrderLine.product_id)
+    )
+    demand = {
+        product_id: Decimal(str(units)) / q.demand_history_days
+        for product_id, units in (await session.execute(demand_statement)).all()
+    }
+    planning_end = as_of + timedelta(days=q.planning_days)
+    purchases = (
+        await session.scalars(
+            select(Purchase).where(
+                Purchase.product_id.in_(product_ids),
+                Purchase.ordered_date <= as_of,
+                (Purchase.arrived_date.is_(None)) | (Purchase.arrived_date > as_of),
+            )
+        )
+    ).all()
+    in_transit = defaultdict(list)
+    for purchase in purchases:
+        in_transit[purchase.product_id].append(
+            {
+                "quantity": purchase.quantity,
+                "expected_date": str(purchase.expected_date),
+                "overdue": purchase.expected_date < as_of,
+            }
+        )
+
+    minimum_margin_rate = Decimal(str(q.minimum_margin_rate))
+    excluded = Counter()
+    rows, recommended = [], []
+    for product_id in product_ids:
+        product = products.get(product_id)
+        if product is None:
+            excluded["missing_product"] += 1
+            continue
+        position = positions.get(product_id)
+        physical = int(position["physical"] or 0) if position else 0
+        reserved_units = int(position["reserved"] or 0) if position else 0
+        available = physical - reserved_units
+        daily_units = demand.get(product_id, Decimal(0))
+        coverage_days = Decimal(available) / daily_units if daily_units > 0 else None
+        arrivals = in_transit[product_id]
+        reliable_in_transit = sum(
+            item["quantity"]
+            for item in arrivals
+            if not item["overdue"] and date.fromisoformat(item["expected_date"]) <= planning_end
+        )
+        price = Decimal(product.price_cents) / 100
+        cost = Decimal(product.cost_cents) / 100
+        margin_denominator = price * (Decimal(1) - minimum_margin_rate)
+        maximum_discount = Decimal(0)
+        if margin_denominator > 0:
+            maximum_discount = max(
+                Decimal(0),
+                (Decimal(1) - cost / margin_denominator) * 100,
+            )
+        maximum_discount_percent = min(
+            100,
+            int(maximum_discount.to_integral_value(rounding=ROUND_FLOOR)),
+        )
+        suggested_discount_percent = min(campaign.discount_percent, maximum_discount_percent)
+        discounted_price = price * (Decimal(100 - suggested_discount_percent) / 100)
+        margin_rate = (discounted_price - cost) / discounted_price if discounted_price > 0 else None
+        projected_units = daily_units * q.planning_days
+        projected_gross_profit = (discounted_price - cost) * projected_units
+
+        exclusion_reason = None
+        if suggested_discount_percent < 1:
+            exclusion_reason = "毛利约束不足"
+        elif daily_units <= 0:
+            exclusion_reason = "近期开单需求不足"
+        elif coverage_days is None or coverage_days < q.minimum_coverage_days:
+            exclusion_reason = "库存覆盖不足"
+        if exclusion_reason:
+            excluded[exclusion_reason] += 1
+        row = {
+            "sku": product.id,
+            "name": product.name,
+            "price": float(price),
+            "cost": float(cost),
+            "suggested_discount_percent": suggested_discount_percent,
+            "maximum_margin_safe_discount_percent": maximum_discount_percent,
+            "estimated_margin_rate": round(float(margin_rate), 4) if margin_rate is not None else None,
+            "available_units": available,
+            "reliable_in_transit_units": reliable_in_transit,
+            "observed_daily_units": round(float(daily_units), 3),
+            "coverage_days": round(float(coverage_days), 2) if coverage_days is not None else None,
+            "lead_days": product.lead_days,
+            "minimum_order": product.moq,
+            "projected_units_next_window": round(float(projected_units), 3),
+            "projected_gross_profit": round(float(projected_gross_profit), 2),
+            "eligible": exclusion_reason is None,
+            "exclusion_reason": exclusion_reason,
+        }
+        rows.append(row)
+        if exclusion_reason is None:
+            recommended.append(row)
+
+    recommended.sort(
+        key=lambda row: (
+            -row["projected_gross_profit"],
+            -row["estimated_margin_rate"],
+            -row["coverage_days"],
+            row["sku"],
+        )
+    )
+    rejected = [row for row in rows if not row["eligible"]]
+    rejected.sort(key=lambda row: (row["exclusion_reason"], row["sku"]))
+    all_rows = [*recommended, *rejected]
+    recommended_products = [
+        {
+            key: row[key]
+            for key in (
+                "sku",
+                "name",
+                "suggested_discount_percent",
+                "estimated_margin_rate",
+                "coverage_days",
+                "available_units",
+                "reliable_in_transit_units",
+                "lead_days",
+            )
+        }
+        for row in recommended[: q.limit]
+    ]
+    warnings = [
+        "未来窗口的需求按最近历史日均销量外推，未将促销带来的销量提升当作既成事实。",
+        "库存覆盖仅基于数据截止日可用库存；在途仅在计划窗口内预计到货且未逾期时单独列示。",
+        "活动规则来自结构化业务活动配置；执行前仍需确认实时锁定库存、活动档期和优惠叠加状态。",
+    ]
+    return {
+        "as_of": str(as_of),
+        "planning_window": {"start": str(as_of + timedelta(days=1)), "end": str(planning_end)},
+        "campaign": {
+            "id": campaign.id,
+            "name": campaign.name,
+            "start": str(campaign.start_date),
+            "end": str(campaign.end_date),
+            "discount_percent": campaign.discount_percent,
+            "rule": campaign.rule,
+            "eligible_sku_count": len(product_ids),
+            "source": "structured_campaign_configuration",
+        },
+        "promotion_summary": {
+            "candidate_sku_count": len(product_ids),
+            "covered_product_count": len(products),
+            "recommended_sku_count": len(recommended),
+            "shown_sku_count": len(recommended_products),
+            "excluded_counts": dict(sorted(excluded.items())),
+            "constraints": {
+                "minimum_margin_rate": float(minimum_margin_rate),
+                "minimum_coverage_days": q.minimum_coverage_days,
+                "maximum_discount_percent": campaign.discount_percent,
+            },
+            "demand_assumption": (
+                f"未来 {q.planning_days} 天需求按截至 {as_of} 前 {q.demand_history_days} 天的支付商品日均销量外推。"
+            ),
+            "recommended_products": recommended_products,
+            "verification_items": [
+                "确认活动档期与现有活动规则是否冲突或可叠加。",
+                "确认推荐 SKU 的实时可用库存、锁定库存和仓库履约能力。",
+                "确认在途采购单的预计到货时间、供应商交期和最小订货量。",
+            ],
+            "warnings": warnings,
+        },
+        "rows": all_rows,
+        "truncated": len(all_rows) > q.limit,
         "simulated": True,
         "currency": "CNY",
     }

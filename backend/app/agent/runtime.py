@@ -78,6 +78,7 @@ def initial_state(goal, settings):
         step_tools={},
         fingerprints={},
         subtasks={},
+        promotion_fast_path=None,
         constraint_version=1,
     )
 
@@ -125,6 +126,31 @@ def compact(value, maximum=4500):
                 "instruction": "库存风险摘要已包含最高优先级仓位；仅在用户要求完整清单时调用 read_evidence。",
             }
             return {**observation, "data": compacted} if observation else compacted
+        promotion_summary = current.get("promotion_summary")
+        if isinstance(promotion_summary, dict):
+            products = list(promotion_summary.get("recommended_products") or [])
+            compact_summary = {**promotion_summary, "recommended_products": products}
+            result = {
+                key: current[key]
+                for key in ("as_of", "planning_window", "campaign", "truncated", "simulated", "currency")
+                if key in current
+            }
+            while products and len(
+                json.dumps({**result, "promotion_summary": compact_summary}, ensure_ascii=False, default=str)
+            ) > maximum:
+                products.pop()
+                compact_summary = {
+                    **promotion_summary,
+                    "recommended_products": products,
+                    "shown_sku_count": len(products),
+                }
+            compacted = {
+                **result,
+                "promotion_summary": compact_summary,
+                "instruction": "促销决策摘要已由服务端完成全量 SKU 的成本、库存和毛利计算；"
+                "除非用户明确要求完整清单，不要读取原始明细或重新计算。",
+            }
+            return {**observation, "data": compacted} if observation else compacted
         current = current.get("data", current.get("result"))
     text = json.dumps(value, ensure_ascii=False, default=str)
     if len(text) <= maximum:
@@ -147,9 +173,10 @@ def compact_observations(rows, *, maximum_rows, maximum_chars):
     for row in reversed(rows[-maximum_rows:]):
         data = row.get("data") if isinstance(row, dict) else None
         risk_summary = data.get("risk_summary") if isinstance(data, dict) else None
+        promotion_summary = data.get("promotion_summary") if isinstance(data, dict) else None
         item_budget = (
             min(4800, maximum_chars)
-            if isinstance(risk_summary, dict)
+            if isinstance(risk_summary, dict) or isinstance(promotion_summary, dict)
             else min(2200, max(700, maximum_chars // 2))
         )
         item = compact(row, maximum=item_budget)
@@ -500,6 +527,8 @@ class AgentRuntime:
         # 统一从任务、记忆和已固化证据构建上下文，各阶段共享同一版本边界。
         s = task.state
         phase = s["phase"]
+        promotion_fast_path = s.get("promotion_fast_path")
+        promotion_save_only = isinstance(promotion_fast_path, dict) and promotion_fast_path.get("status") == "snapshot_ready"
         summaries = [
             {
                 "id": item["id"],
@@ -528,7 +557,11 @@ class AgentRuntime:
             "remaining_budget": {key: s["budget"][key] - s["turn_usage"].get(key, 0) for key in s["budget"]},
             "feedback": s.get("feedback", ""),
             "inventory_risk_fast_path": s.get("inventory_risk_fast_path"),
-            "tools": catalog(include_schema=phase == "execute"),
+            "promotion_fast_path": promotion_fast_path,
+            "tools": catalog(
+                names=["save_artifact"] if promotion_save_only else None,
+                include_schema=phase == "execute",
+            ),
             "constraint_version": s["constraint_version"],
         }
 
@@ -538,6 +571,63 @@ class AgentRuntime:
         asks_complete_list = any(token in goal for token in ("全部", "全量", "所有", "完整清单", "导出"))
         inventory_intent = any(token in goal for token in ("缺货", "补货", "库存风险"))
         return inventory_intent and not asks_complete_list
+
+    @staticmethod
+    def _promotion_fast_path_allowed(task):
+        """只将同时涉及活动、毛利和库存的促销决策路由到领域聚合工具。"""
+
+        goal = task.goal.lower()
+        asks_complete_list = any(token in goal for token in ("全部", "全量", "所有", "完整清单", "导出"))
+        has_activity = any(token in goal for token in ("促销", "活动", "折扣", "优惠"))
+        has_economics = any(token in goal for token in ("成本", "毛利", "利润"))
+        has_inventory = any(token in goal for token in ("库存", "在途", "交期"))
+        return has_activity and has_economics and has_inventory and not asks_complete_list
+
+    @staticmethod
+    def _promotion_artifact_requested(task):
+        return any(token in task.goal.lower() for token in ("保存", "方案", "报告", "文档"))
+
+    async def dispatch_promotion_fast_path(self, task):
+        """为促销组合决策直接安排一次服务端聚合，阻止模型进入长表分页循环。"""
+
+        state = copy.deepcopy(task.state)
+        if (
+            state["phase"] != "execute"
+            or state.get("promotion_fast_path")
+            or not self._promotion_fast_path_allowed(task)
+        ):
+            return False
+        step = self.current_step(state)
+        remaining_tools = state["budget"]["tool_calls"] - state["turn_usage"]["tool_calls"]
+        if (
+            step is None
+            or remaining_tools < 1
+            or state["step_tools"].get(step["id"], 0) >= self.settings.max_step_tools
+        ):
+            return False
+        call_id = uid()
+        state["promotion_fast_path"] = {
+            "status": "dispatched",
+            "requires_artifact": self._promotion_artifact_requested(task),
+            "step_id": step["id"],
+        }
+        state["pending"] = {
+            "kind": "tool",
+            "tool": "build_promotion_snapshot",
+            "arguments": {},
+            "summary": "汇总活动参与商品、成本、毛利与库存约束",
+            "id": call_id,
+            "step_id": step["id"],
+        }
+        state["phase"] = "tool"
+        state["feedback"] = "已识别为促销组合决策，先由服务端完成全量 SKU 聚合计算。"
+        await self.commit(
+            task,
+            state,
+            "promotion_fast_path_dispatched",
+            {"step_id": step["id"], "requires_artifact": state["promotion_fast_path"]["requires_artifact"]},
+        )
+        return True
 
     def _activate_inventory_fast_path(self, task, state, observations):
         if not self._inventory_fast_path_allowed(task):
@@ -560,6 +650,41 @@ class AgentRuntime:
                 "当前用户未要求完整导出清单，直接基于该证据完成优先级建议，不再扩展查询、分页或重规划。"
             )
             return True
+        return False
+
+    def _advance_promotion_fast_path(self, state, observations):
+        """将聚合证据、方案保存和最终评估串成受控的三段式收尾流程。"""
+
+        fast_path = state.get("promotion_fast_path")
+        if not isinstance(fast_path, dict):
+            return False
+        for observation in observations:
+            if (
+                fast_path.get("status") == "dispatched"
+                and observation.get("status") == "success"
+                and observation.get("tool") == "build_promotion_snapshot"
+                and isinstance(observation.get("data", {}).get("promotion_summary"), dict)
+            ):
+                fast_path.update(status="snapshot_ready", evidence_id=observation["evidence_id"])
+                if fast_path.get("requires_artifact"):
+                    state["phase"] = "execute"
+                    state["feedback"] = (
+                        "促销决策摘要已完成。用户要求保存方案；下一步必须仅调用 save_artifact，"
+                        "并引用该摘要证据，不得读取活动明细、重规划或发起其他查询。"
+                    )
+                else:
+                    state["phase"] = "evaluate"
+                    state["feedback"] = "促销决策摘要已完成，请仅基于该证据完成最终评估。"
+                return True
+            if (
+                fast_path.get("status") == "snapshot_ready"
+                and observation.get("status") == "success"
+                and observation.get("tool") == "save_artifact"
+            ):
+                fast_path.update(status="artifact_saved", artifact_id=observation.get("data", {}).get("artifact_id"))
+                state["phase"] = "evaluate"
+                state["feedback"] = "促销方案已保存，请基于聚合证据和已保存成果完成最终评估。"
+                return True
         return False
 
     async def reserve(self, task, kind):
@@ -672,6 +797,9 @@ class AgentRuntime:
             await self.commit(task, state, "evaluating", {"message": "正在检查任务完成条件"})
             return True
         if state["phase"] == "execute":
+            dispatched = await self.dispatch_promotion_fast_path(task)
+            if dispatched:
+                return True
             dispatched = await self.dispatch_explicit_multidomain_work(task)
             if dispatched:
                 return True
@@ -927,6 +1055,13 @@ class AgentRuntime:
         step = self.current_step(state)
         if step is None:
             raise ValueError("没有可执行步骤，应评估总目标")
+        promotion_fast_path = state.get("promotion_fast_path")
+        if isinstance(promotion_fast_path, dict) and promotion_fast_path.get("status") == "snapshot_ready":
+            if action.kind != "tool" or action.tool != "save_artifact":
+                raise ValueError("促销决策摘要已完成；用户要求保存方案时下一步必须调用 save_artifact")
+            snapshot_id = promotion_fast_path.get("evidence_id")
+            if snapshot_id not in action.arguments.get("evidence_ids", []):
+                raise ValueError("保存促销方案必须引用促销决策摘要证据")
         self.check_evidence(state, action.evidence_ids)
         if action.kind in {"tool", "tools"}:
             calls = (
@@ -1402,7 +1537,9 @@ class AgentRuntime:
                 observations.append(observation)
                 evidences.append(evidence)
             state["pending"] = None
-            if not self._activate_inventory_fast_path(task, state, observations):
+            if not self._activate_inventory_fast_path(task, state, observations) and not self._advance_promotion_fast_path(
+                state, observations
+            ):
                 state["phase"] = "execute"
                 state["feedback"] = (
                     ""
@@ -1452,7 +1589,9 @@ class AgentRuntime:
                 state, task, call, fingerprint, status, error, result
             )
             state["pending"] = None
-            if not self._activate_inventory_fast_path(task, state, [observation]):
+            if not self._activate_inventory_fast_path(task, state, [observation]) and not self._advance_promotion_fast_path(
+                state, [observation]
+            ):
                 state["phase"] = "execute"
                 state["feedback"] = "" if status == "success" else f"工具返回 {status}，请根据观察修正行动。"
             await self.commit(task, state, "tool_result", observation, evidence=evidence, session=session)

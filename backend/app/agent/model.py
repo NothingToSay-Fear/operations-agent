@@ -34,6 +34,7 @@ PROMPTS = {
 通常用1至4个子目标覆盖问题；确认口径属于调查准备，撰写结论属于交付，不必分别新增步骤。
 计划本身不会完成任务，后续执行器将真正调用工具。""",
     "execute": """执行当前子目标。每次决定一个动作：tool 调用一个工具；tools 批量调用多个相互独立的只读工具；delegate 将边界清晰、相互独立的专项调查委派给临时子 Agent；step_done 表示子目标已满足；
+若 promotion_fast_path.status 为 snapshot_ready，说明服务端已完成活动参与 SKU、成本、毛利、库存、在途和需求的全量计算。若用户要求保存方案，下一步只能调用 save_artifact，并在 evidence_ids 中原样引用 promotion_fast_path.evidence_id；不得读取明细、重规划或调用其他工具。
 replan 表示需要调整剩余计划；ask_user 表示缺少无法自行获取的关键条件。
 优先把同一子目标中互不依赖的查询合并为一次 tools 动作，最多6个；有先后依赖的查询必须分开。
 仅在任务确实横跨相互独立的数据域，且子 Agent 能用较小上下文完成调查时使用 delegate。子任务最多3个；明确 role、目标、完成条件和只读工具白名单。
@@ -51,6 +52,7 @@ step_done 的 evidence_ids 只能使用实际成功工具返回的证据。别�
 finish/stop 的 evidence_ids 与每条 finding.evidence_ids 只能从 subtask_available_evidence_ids 原样复制；该列表为空时不得编造 ID，应返回 stop 并在 limitations 说明原因。
 shared_scope 只用于确定可查数据窗口和指标口径，不得将其转写为本子任务的 evidence_ids。结论只能引用本子任务的 subtask_available_evidence_ids。""",
     "evaluate": """根据当前计划、已完成步骤和工具观察检查总目标。
+若 promotion_fast_path.status 为 artifact_saved，必须基于促销决策摘要证据和已保存成果完成交付；不得继续查询或重规划。答案应明确建议商品、折扣、毛利约束、库存假设、执行前验证项和成果链接。
 若 inventory_risk_fast_path 存在，说明 query_inventory 已基于全量仓位生成两周缺货风险摘要。当前用户未要求完整导出清单时，必须直接返回 finish：用该摘要中的最高优先级 SKU 给出补货建议，并如实说明 risk_positions 与 shown_positions；不得 continue、replan、ask_user 或发起补充查询。
 continue 继续已有待执行步骤；replan 修改计划；ask_user 请求关键补充；
 finish 仅用于所有成功标准满足且成果真实存在；stop 用于无法继续并交付部分成果。
