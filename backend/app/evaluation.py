@@ -1,4 +1,4 @@
-"""在隔离数据上执行真实模型场景评测，机械检查不能代替语义审核。"""
+"""Agent 编排、工具和交付行为的集成评测。"""
 
 import argparse
 import asyncio

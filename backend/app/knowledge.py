@@ -1,4 +1,4 @@
-"""资料服务兼容入口，具体实现集中在版本化检索模块。"""
+"""兼容层：将历史调用转发到版本化知识库服务。"""
 
 from app.knowledge_service import (
     parse_document,

@@ -1,4 +1,4 @@
-"""可恢复的资料索引、任务历史编码、摘要和记忆候选后台任务。"""
+"""资料索引、摘要和记忆候选的可恢复后台作业。"""
 
 import asyncio
 import copy
@@ -26,6 +26,7 @@ async def migrate_legacy(database):
 
 
 async def claim(database, settings):
+    # 通过租约抢占后台作业，多个 Worker 可并行运行而不会重复处理同一任务。
     now = time.time()
     async with database.sessions() as session, session.begin():
         await session.execute(
@@ -77,6 +78,7 @@ async def claim(database, settings):
 
 
 async def heartbeat(database, settings, job_id, token):
+    # 心跳只延长持有者自己的租约，令牌不匹配即停止。
     while True:
         await asyncio.sleep(max(1, settings.background_lease_seconds / 3))
         async with database.sessions() as session, session.begin():
@@ -115,6 +117,7 @@ async def reserve_model(database, job_id, token, settings):
 
 
 async def prepare(database, settings, job, token):
+    # 各类后台作业统一在这里准备输入，失败时保留可诊断状态。
     async with database.sessions() as session:
         if job.kind == "index":
             version = await session.get(DocumentVersion, job.target_id)
@@ -189,6 +192,7 @@ async def prepare(database, settings, job, token):
 
 
 async def process(database, settings, job_id, token):
+    # 作业执行后再次校验租约和版本，避免旧 Worker 发布过期结果。
     started = time.monotonic()
     ticker = asyncio.create_task(heartbeat(database, settings, job_id, token))
     try:

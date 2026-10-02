@@ -1,4 +1,4 @@
-"""管理员公共资料、个人资料及确认式记忆的用户接口。"""
+"""资料、记忆和任务历史的权限控制接口。"""
 
 import time
 from typing import Literal
@@ -55,6 +55,7 @@ def serialize(row, fields):
 
 
 def router(database, settings):
+    # 资料、记忆与任务历史接口在路由层再次执行范围校验。
     api = APIRouter(prefix="/api")
 
     async def document(session, doc_id, user, manage=False):
@@ -147,6 +148,7 @@ def router(database, settings):
     async def upload(
         file: UploadFile = File(...), shared: bool | None = Form(default=None), user=Depends(current_user)
     ):
+        # 上传只创建待索引版本；旧的可用版本会保留到新版本完整发布。
         data = await read_upload(file)
         async with database.sessions() as session, session.begin():
             if shared and not user.is_admin:
@@ -233,6 +235,7 @@ def router(database, settings):
 
     @api.delete("/documents/{doc_id}")
     async def remove_document(doc_id: str, user=Depends(current_user)):
+        # 删除资料同时清理版本、片段和后台作业，防止遗留内容继续被召回。
         async with database.sessions() as session, session.begin():
             doc, scope = await document(session, doc_id, user, manage=True)
             await access.bump_scope(session, await access.document_users(session, doc, scope))
@@ -302,6 +305,7 @@ def router(database, settings):
 
     @api.post("/memory-candidates/{candidate_id}/confirm")
     async def confirm_candidate(candidate_id: str, body: CandidateConfirm, user=Depends(current_user)):
+        # 长期记忆必须显式确认，接口不接受模型直接写入正式记忆。
         async with database.sessions() as session, session.begin():
             try:
                 row = await memory.confirm(

@@ -1,4 +1,4 @@
-"""集中清理一个会话及其直接产生的持久化内容。"""
+"""会话级级联删除，清理任务产生的全部关联内容。"""
 
 from sqlalchemy import delete, or_, select
 
@@ -19,6 +19,7 @@ from app.models import Artifact, Evidence, Run, Task, TaskEvent
 
 
 async def delete_task_contents(session, task: Task) -> None:
+    # 依赖关系按子表到父表顺序清理，保证删除会话后不会残留可访问的证据或记忆。
     """在调用方持有任务行锁时，按外键依赖顺序删除会话内容。"""
     candidates = list(
         await session.scalars(select(MemoryCandidate).where(MemoryCandidate.task_id == task.id))

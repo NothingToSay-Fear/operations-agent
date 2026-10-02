@@ -1,4 +1,4 @@
-"""当前任务的摘要与历史，以及用户确认后才生效的长期记忆。"""
+"""任务内历史、摘要和经用户确认的长期记忆。"""
 
 import json
 import re
@@ -176,6 +176,7 @@ async def confirm(session, user_id, candidate_id, version, *, content=None, kind
 
 
 async def select_memories(session, user_id, query, settings=None):
+    # 长期记忆只在用户自身范围内检索，并按有效期、状态和来源版本过滤。
     rows = list(
         await session.scalars(
             select(UserMemory)
@@ -220,6 +221,7 @@ async def select_memories(session, user_id, query, settings=None):
 
 
 async def append_history(session, task, seq, kind, payload, settings):
+    # 原始历史独立保存，摘要只是压缩索引；核对细节时仍可按 HistoryUnit 回读。
     """与任务事件同事务记录；业务查询原始大结果继续存放证据表。"""
     if kind not in {"user", "user_control", "plan_updated", "action", "evaluation", "tool_result"}:
         return
@@ -268,6 +270,7 @@ async def unit_allowed(session, task, unit, revision):
 
 
 async def history_search(session, task, query, settings, limit=4, unit_id=None):
+    # 历史检索严格限定 task_id，禁止跨任务召回对话原文。
     # task_id 只取当前受信任任务，不允许模型传入或选择另一个任务。
     base = select(HistoryUnit).where(HistoryUnit.task_id == task.id)
     revision = await access.scope_revision(session, task.user_id)
@@ -357,6 +360,7 @@ async def history_search(session, task, query, settings, limit=4, unit_id=None):
 
 
 async def build_context(session, task, settings):
+    # 返回给 Agent 的上下文由约束、近期窗口、摘要、长期记忆和按需历史组成。
     revision = await access.scope_revision(session, task.user_id)
     constraints, short_term = await task_context.ensure_task_context(session, task, settings)
     latest = await task_context.latest_user_message(session, task)

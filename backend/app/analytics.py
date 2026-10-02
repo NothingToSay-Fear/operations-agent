@@ -1,4 +1,4 @@
-"""只读结构化经营查询，不包含自然语言路由或任意 SQL 执行。"""
+"""只读的结构化经营查询与库存风险汇总。"""
 
 from collections import defaultdict
 from datetime import date, timedelta
@@ -77,6 +77,7 @@ class InventoryQuery(StrictModel):
 
 
 def inventory_risk_summary(rows: list[dict], as_of: date, demand_days: int, maximum_rows: int = 10) -> dict:
+    # 先在数据库侧聚合，再按交期、在途、最小订货量和需求假设计算补货建议。
     """将全量库存仓位转换为可直接用于补货判断的受控风险摘要。"""
     horizon_end = as_of + timedelta(days=demand_days)
     risks = []
@@ -257,6 +258,7 @@ async def aggregate(session, cols, source, conditions, group):
 
 
 async def query_metrics(session, q: Query, *, all_groups=False):
+    # 指标查询只接受结构化筛选条件，不拼接用户提供的 SQL 或列名。
     as_of, meta = await cutoff(session, q.as_of)
     if q.end_date > as_of:
         raise ValueError("查询结束日期超过数据截止时间")
@@ -332,6 +334,7 @@ async def query_metrics(session, q: Query, *, all_groups=False):
 
 
 async def compare_metrics(session, q: PeriodComparison):
+    # 对比查询同时返回两个周期及分组差额，供 Agent 生成可追溯的贡献结论。
     """先对齐全部分组并计算差额，再选主要贡献项，避免分别取两期头部造成遗漏。"""
     params = q.model_dump(exclude={"previous_start_date", "previous_end_date", "metric"})
     current = await query_metrics(session, Query(**params), all_groups=True)
@@ -413,6 +416,7 @@ async def get_products(session, q: ProductQuery):
 
 
 async def query_inventory(session, q: InventoryQuery):
+    # 库存查询在服务端完成风险汇总，避免大表分页结果迫使模型反复读取。
     as_of, _ = await cutoff(session, q.as_of)
     reserved = InventoryMovement.kind.in_(["reserve", "release"])
     statement = select(

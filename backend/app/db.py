@@ -1,3 +1,5 @@
+"""应用数据库与只读业务数据库的异步连接管理。"""
+
 from pathlib import Path
 
 from sqlalchemy import event

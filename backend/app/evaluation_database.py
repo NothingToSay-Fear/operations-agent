@@ -1,4 +1,4 @@
-"""测试与评测专用的 PostgreSQL 数据库隔离工具。"""
+"""评测专用 PostgreSQL 数据库的创建、授权与重置。"""
 
 import os
 
@@ -11,6 +11,7 @@ from app.models import Base
 
 
 def require_postgres_url(name: str) -> str:
+    # 评测明确拒绝 SQLite，避免检索索引和 SQL 行为与正式 PostgreSQL 环境不一致。
     value = os.environ.get(name, "").strip()
     if not value.startswith("postgresql+"):
         raise RuntimeError(f"{name} 必须配置为独立的 PostgreSQL 数据库地址")
@@ -32,6 +33,7 @@ def evaluation_urls(prefix: str, settings) -> tuple[str, str, str]:
 
 
 async def reset_application_database(url: str, *, retrieval_indexes: bool = False):
+    # 评测库独立重置；调用方只能传入专用 RAG 或 Agent 评测连接串。
     engine = make_engine(url)
     try:
         async with engine.begin() as connection:

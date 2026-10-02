@@ -1,3 +1,5 @@
+"""基于密码哈希和服务端会话的认证能力。"""
+
 import hashlib
 import hmac
 import secrets

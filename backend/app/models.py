@@ -1,3 +1,5 @@
+"""应用核心身份、任务、证据与成果数据模型。"""
+
 import time
 import uuid
 

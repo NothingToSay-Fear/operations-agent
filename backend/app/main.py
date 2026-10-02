@@ -47,6 +47,7 @@ class ArtifactEdit(StrictModel):
 
 
 def task_view(task, detail=True):
+    # 对外返回任务快照时按需裁剪内部字段，不泄露运行期实现细节。
     result = dict(
         id=task.id,
         goal=task.goal,
@@ -68,6 +69,7 @@ async def own_task(session, task_id, user_id):
 
 
 async def conversation_view(session, task):
+    # 会话展示来自持久化消息表，确保刷新和重连后仍可恢复顺序。
     """从持久化事件恢复按时间排列的用户问题和 Agent 回复。"""
     revision = await access.scope_revision(session, task.user_id)
     rows = list(
@@ -265,6 +267,7 @@ async def ensure_admin(database, settings):
 
 
 def create_app(settings=None, *, start_worker=True, model=None):
+    # Worker 可由 API 内嵌启动，也可在 Docker 中独立启动；两者复用同一租约协议。
     settings = settings or get_settings()
     database = Database(settings)
     stop = asyncio.Event()

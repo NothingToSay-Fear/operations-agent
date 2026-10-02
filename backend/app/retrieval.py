@@ -1,4 +1,4 @@
-"""中文词面召回、真实本地向量模型与融合精排的公共能力。"""
+"""分词、向量编码、融合和精排的检索公共能力。"""
 
 import asyncio
 from functools import lru_cache
@@ -53,6 +53,7 @@ async def encode(texts, settings):
 
 
 def lexical_rank(query, rows, text_key="text", limit=40):
+    # 本地兼容路径使用词面排序；PostgreSQL 正式链路的词面召回由 ts_rank_cd 执行。
     query_tokens = tokens(query)
     corpus = [tokens(row[text_key]) or ["空"] for row in rows]
     if not rows or not query_tokens:
@@ -67,6 +68,7 @@ def lexical_rank(query, rows, text_key="text", limit=40):
 
 
 def fuse(rankings):
+    # RRF 只融合候选排名，不混入不同检索器不可比的原始分数。
     scores = {}
     for ranking in rankings:
         for rank, item_id in enumerate(dict.fromkeys(ranking), 1):
@@ -83,6 +85,7 @@ def cosine(a, b):
 
 
 async def rerank(query, rows, settings, limit=5):
+    # 精排只处理有限候选集，控制单次模型推理延迟和上下文成本。
     if not rows or not settings.reranker_model_path:
         return rows[:limit], False
     values = await asyncio.to_thread(

@@ -1,4 +1,4 @@
-"""可复现的业务事实生成器，禁止注册为 Agent 工具。"""
+"""可复现的模拟电商经营数据生成与对账。"""
 
 import argparse
 import asyncio

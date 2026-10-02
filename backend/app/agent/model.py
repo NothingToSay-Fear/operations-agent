@@ -1,3 +1,5 @@
+"""模型网关与结构化输出修复，将模型响应限定在阶段 Schema 内。"""
+
 import asyncio
 import json
 from urllib.parse import urlsplit
@@ -80,6 +82,7 @@ def uses_json_output(settings):
 
 
 def structured_output(model, schema, settings):
+    # 优先使用服务商的 JSON Schema 能力；不支持时退回提示约束和本地 Pydantic 校验。
     """统一主循环与记忆维护的结构化输出适配，兼容 DeepSeek 思考模式。"""
     kwargs = {} if settings.llm_provider == "anthropic" else {"method": "function_calling"}
     if uses_json_output(settings):
@@ -147,6 +150,7 @@ def _validation_error(error):
 
 
 def _repair_extra_fields(raw, error, schema, settings):
+    # 仅删除 Schema 明确拒绝的多余字段，绝不猜测或补造缺失业务内容。
     """仅移除JSON模式响应中的多余字段；任何其他校验错误仍保持失败。"""
     if not uses_json_output(settings):
         return None
@@ -215,6 +219,7 @@ def parse_structured_result(result, schema, settings):
 
 
 async def invoke_structured(model, schema, settings, prompt, payload):
+    # 模型调用、格式修复和用量统计封装在同一边界，调用方只处理已校验对象。
     try:
         result = await asyncio.wait_for(
             structured_output(model, schema, settings).ainvoke(
@@ -311,6 +316,7 @@ class ModelGateway:
         raise ModelUnavailable("不支持的 LLM_PROVIDER；可选 openai、anthropic、ollama")
 
     async def decide(self, phase: str, context: dict):
+        # 阶段名决定输出协议，避免 Plan、Execute 和 Evaluate 复用不兼容的 Schema。
         if self._model is None:
             self._model = self.build()
         schema = {"plan": Plan, "execute": Action, "subtask": SubtaskDecision, "evaluate": Decision}[phase]

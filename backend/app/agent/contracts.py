@@ -1,3 +1,5 @@
+"""规划、执行、子任务与评估阶段的严格结构化协议。"""
+
 from typing import Literal
 
 from pydantic import Field, model_validator

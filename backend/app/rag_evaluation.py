@@ -1,4 +1,4 @@
-"""在隔离 PostgreSQL 中执行版本化 RAG 评测并输出可追溯报告。"""
+"""使用真实解析、索引与 PostgreSQL 召回链路的 RAG 评测。"""
 
 from __future__ import annotations
 

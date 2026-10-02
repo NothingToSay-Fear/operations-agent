@@ -1,4 +1,4 @@
-"""结构化资料索引、数据库混合召回、版本引用与权限复核。"""
+"""版本化资料索引与混合检索：完成前不发布，读取时重新校验权限。"""
 
 import asyncio
 import hashlib
@@ -20,6 +20,7 @@ def parse_document(filename, data):
 
 
 async def enqueue_version(session, doc, filename, raw):
+    # 版本号在行锁内递增，确保并发上传不会覆盖正在使用的可检索版本。
     # 锁住父记录，使并发上传不产生重复版本号。
     await session.execute(select(Document.id).where(Document.id == doc.id).with_for_update())
     number = (
@@ -42,6 +43,7 @@ async def enqueue_version(session, doc, filename, raw):
 
 
 async def prepare_index(version, settings):
+    # 预处理阶段不发布资料；只有解析、分块和向量准备成功后才允许切换。
     parsed = await asyncio.to_thread(parse_structured, version.filename, version.raw)
     if not parsed.content.strip() or len(parsed.content) > 300000:
         raise ValueError("资料无可读取文字或超过 30 万字符")
@@ -86,6 +88,7 @@ async def prepare_index(version, settings):
 
 
 async def publish_index(session, version, prepared):
+    # 先写新片段再切换 active_version，读取方始终只能看到完整版本。
     scope = await session.scalar(
         select(DocumentScope).where(DocumentScope.document_id == version.document_id).with_for_update()
     )
@@ -152,6 +155,7 @@ def as_row(segment, version, document):
 
 
 async def search(session, commerce, user_id, query, settings, limit=5, queries=None):
+    # 权限、启用状态和版本范围在召回前过滤，不让排序决定资料是否可见。
     started = time.monotonic()
     queries = list(dict.fromkeys([query, *(queries or [])]))[:3]
     vectors, warnings = None, []
@@ -242,6 +246,7 @@ async def search(session, commerce, user_id, query, settings, limit=5, queries=N
 
 
 async def read(session, commerce, user_id, document_id, position=0, version_id=None, segment_id=None):
+    # 证据回读仍复用可见范围校验，防止通过文档编号绕过停用或权限撤回。
     doc, scope = await access.get_document(session, user_id, document_id)
     active = scope.active_version_id if scope else None
     if version_id and version_id != active:

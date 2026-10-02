@@ -1,4 +1,4 @@
-"""任务消息、结构化有效约束和有限近期窗口。"""
+"""任务消息、结构化有效约束、摘要与近期上下文窗口。"""
 
 from __future__ import annotations
 
@@ -110,6 +110,7 @@ def _general_constraints(text: str, message_id: str) -> list[dict]:
 
 
 def apply_constraint_update(previous: dict | None, text: str, message_id: str) -> tuple[dict, list[dict]]:
+    # 追问以覆盖式事件更新结构化约束；原始消息仍完整保留。
     """用确定性规则更新常见业务字段，同时保留无法类型化的用户原文约束。"""
     current = copy.deepcopy(previous) if previous else _base_state(text, message_id)
     changes: list[dict] = []
@@ -231,6 +232,7 @@ def _turn_value(message: TaskMessage, settings) -> dict:
 
 
 async def _append_recent(session, task, message: TaskMessage, settings) -> TaskMemory:
+    # 近期窗口按数量与字符双重上限裁剪，超出原文由摘要与 HistoryUnit 承接。
     _, state = await ensure_task_context(session, task, settings)
     state = await session.scalar(select(TaskMemory).where(TaskMemory.task_id == task.id).with_for_update())
     turns = list(state.recent_turns or [])
@@ -363,6 +365,7 @@ async def latest_user_message(session, task) -> TaskMessage | None:
 
 
 async def persist_context_snapshot(session, task, call_number: int, phase: str, manifest: dict):
+    # 仅持久化上下文清单和版本引用，用于复盘，不复制完整提示词。
     existing = await session.scalar(
         select(ModelContextSnapshot).where(
             ModelContextSnapshot.task_id == task.id,

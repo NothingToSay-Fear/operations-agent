@@ -62,6 +62,7 @@ class SaveArtifact(StrictModel):
 
 
 def calculate(expression, values):
+    # 使用 AST 限制表达式能力，禁止把计算工具变成任意代码执行入口。
     tree = ast.parse(expression, mode="eval")
     if len(list(ast.walk(tree))) > 100 or len(values) > 30:
         raise ValueError("计算表达式过于复杂")
@@ -162,6 +163,7 @@ def supports_parallel(name):
 
 
 async def invoke(name, args, *, commerce, session, task, settings, artifact_id):
+    # 所有工具结果在此归一化，保证执行器能生成一致的 Observation 与 Evidence。
     if name not in REGISTRY:
         raise ValueError("工具未注册")
     query = REGISTRY[name].schema.model_validate(args)

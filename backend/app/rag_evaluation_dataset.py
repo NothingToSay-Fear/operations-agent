@@ -1,4 +1,4 @@
-"""加载版本化 RAG 评测资料、问题与质量门槛。"""
+"""版本化 RAG 评测集与回归基线的加载和校验。"""
 
 from __future__ import annotations
 

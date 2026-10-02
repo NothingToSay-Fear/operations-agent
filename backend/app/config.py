@@ -1,3 +1,5 @@
+"""环境配置及其中央化校验。"""
+
 from functools import lru_cache
 from pathlib import Path
 

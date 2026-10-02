@@ -1,4 +1,4 @@
-"""将运营资料解析为保留章节结构的可检索文本片段。"""
+"""运营资料的结构化解析、表格保证与可检索分块。"""
 
 from __future__ import annotations
 
@@ -54,6 +54,7 @@ class ParsedDocument:
 
 
 def parse_document(filename: str, raw_content: bytes) -> ParsedDocument:
+    # 文件解析先保留标题、列表和表格边界，后续分块不拆散一条表格记录。
     """根据扩展名提取结构块；不支持的格式必须在写库前被拒绝。"""
     if len(raw_content) > 8 * 1024 * 1024:
         raise ValueError("资料最大 8MB")
@@ -249,6 +250,7 @@ def _build_chunks(
     semantic_similarities: dict[int, float] | None = None,
     semantic_similarity_threshold: float | None = None,
 ) -> list[ParsedChunk]:
+    # 优先按结构块累积到目标长度，超长段落和表格再走各自的细分策略。
     """在同一章节内合并完整结构块，仅对超长块进行句级硬切。"""
     chunks: list[ParsedChunk] = []
     current: list[ParsedBlock] = []
@@ -318,6 +320,7 @@ def _split_oversized_block(block: ParsedBlock) -> list[ParsedBlock]:
 
 
 def _split_table_block(block: ParsedBlock) -> list[ParsedBlock]:
+    # 每个表格分块重复保留表头，保证单独召回时字段含义仍完整。
     lines = [line for line in block.content.splitlines() if line.strip()]
     if len(lines) <= 1:
         return _hard_split(block)

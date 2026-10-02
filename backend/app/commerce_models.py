@@ -1,3 +1,5 @@
+"""模拟电商业务数据的 SQLAlchemy 模型。"""
+
 from sqlalchemy import Column, Date, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import DeclarativeBase
 

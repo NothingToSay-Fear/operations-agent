@@ -1,4 +1,4 @@
-"""资料权限与上下文版本校验，所有入口共用相同边界。"""
+"""知识库、证据与记忆的可见范围校验。"""
 
 import time
 
@@ -9,6 +9,7 @@ from app.models import Document, User
 
 
 def document_filter(user_id, *, enabled=True):
+    # 资料可见性始终由所有者、共享范围和启用状态共同决定。
     private = and_(
         or_(DocumentScope.document_id.is_(None), DocumentScope.shared == 0),
         Document.user_id == user_id,
@@ -61,6 +62,7 @@ async def scope_revision(session, user_id, *, lock=False):
 
 
 async def bump_scope(session, user_ids):
+    # 范围变更递增修订号，使运行中的任务能够发现资料权限已经变化。
     for user_id in sorted(set(user_ids)):
         await scope_revision(session, user_id, lock=True)
         await session.execute(
@@ -75,6 +77,7 @@ async def document_users(session, doc, scope):
 
 
 async def references_allowed(session, user_id, data):
+    # 在输出引用前复核证据来源，阻止未注册模拟资料或已撤回资料泄漏。
     """复核证据中引用的资料版本，禁止失效来源经证据回读重新进入上下文。"""
     if not isinstance(data, dict):
         return True

@@ -1,4 +1,4 @@
-"""可恢复的规划、执行和评估循环，通过任务版本与租约阻止过期提交。"""
+"""可恢复的 Plan-and-Execute 运行时：以租约、版本和证据保证任务可审计推进。"""
 
 import asyncio
 import copy
@@ -39,6 +39,7 @@ SUBTASK_TOOLS = {
 
 
 def initial_state(goal, settings):
+    # 任务状态只保存可恢复的业务事实；模型上下文在调用前按需组装。
     return dict(
         phase="plan",
         messages=[{"role": "user", "content": goal}],
@@ -496,6 +497,7 @@ class AgentRuntime:
         return None
 
     def context(self, task):
+        # 统一从任务、记忆和已固化证据构建上下文，各阶段共享同一版本边界。
         s = task.state
         phase = s["phase"]
         summaries = [
@@ -686,6 +688,7 @@ class AgentRuntime:
         return await self.decide(task, phase)
 
     async def decide(self, task, phase):
+        # 每次决策都基于最新持久化状态，避免租约切换后使用过期内存。
         if task.state["phase"] != phase:
             raise LeaseLost()
         task = await self.reserve(task, "model_calls")
@@ -784,6 +787,7 @@ class AgentRuntime:
             return False
 
     async def apply_plan(self, task, state, plan):
+        # 计划只描述目标和完成条件；工具选择留给 Execute 阶段根据观察决定。
         if state["plan"]:
             if state["turn_usage"]["replans"] >= state["budget"]["replans"]:
                 state["answer"] = "已达到重规划上限，保留现有成果和待完成步骤。"
@@ -919,6 +923,7 @@ class AgentRuntime:
         return True
 
     async def apply_action(self, task, state, action):
+        # Action 先经过预算、重复调用和证据依赖校验，再写入待执行工具队列。
         step = self.current_step(state)
         if step is None:
             raise ValueError("没有可执行步骤，应评估总目标")
@@ -978,6 +983,7 @@ class AgentRuntime:
         return action.kind != "ask_user"
 
     async def apply_decision(self, task, state, decision):
+        # Evaluate 的结论只能推进、交付、追问或阻塞，不能绕过工具结果修改事实。
         if state.get("finalizing") and decision.kind in {"continue", "replan"}:
             raise ValueError(
                 "当前预算只够收尾，请返回 finish 或 stop 并交付已有证据支持的结论；信息不足时明确说明缺口。"
@@ -1107,6 +1113,7 @@ class AgentRuntime:
         }
 
     async def execute_subtasks(self, task):
+        # 子任务只接收最小共享范围，结果回收为摘要和证据编号。
         """并发推进同一主步骤的临时子 Agent；每个子 Agent 只看到自己的调查上下文。"""
         state = copy.deepcopy(task.state)
         active = [
@@ -1332,6 +1339,7 @@ class AgentRuntime:
         return observation, evidence
 
     async def execute_tool(self, task):
+        # 原始工具结果固化为 Evidence；下一次模型调用仅使用受限的 Observation。
         pending = task.state["pending"]
         if (
             pending.get("kind") != "batch"
