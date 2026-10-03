@@ -1,0 +1,21 @@
+{
+  "version": "v1",
+  "default_repeat": 1,
+  "quality_gates": {
+    "deterministic_pass_rate": {
+      "minimum": 0.9
+    },
+    "evidence_coverage_rate": {
+      "minimum": 0.95
+    },
+    "artifact_success_rate": {
+      "minimum": 1.0
+    },
+    "routing_success_rate": {
+      "minimum": 1.0
+    },
+    "forbidden_tool_violation_rate": {
+      "maximum": 0.0
+    }
+  }
+}

@@ -60,6 +60,7 @@ services:
       LLM_TIMEOUT: ${LLM_TIMEOUT:-90}
     volumes:
       - ./models:/models:ro
+      - ./backend/evaluation:/app/evaluation
       - ./evaluation-reports:/app/evaluation-reports
     depends_on:
       db-test: {condition: service_healthy}

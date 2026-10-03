@@ -17,7 +17,7 @@
 - 结构化/语义分块、版本化后台索引、PostgreSQL 全文与向量召回、RRF 和真实 BGE 精排。
 - 当前任务摘要与历史召回；长期记忆经用户确认后生效，支持修改、到期、停用和忘记。
 - 管理员公共资料和用户个人资料；公共资料由每个用户独立启用，不共享个人任务或记忆。
-- 32 个真实模型评测场景；协议、权限、数值与恢复测试使用明确的测试替身。
+- 32 个版本化 Plan-and-Execute 真实模型评测场景，具备确定性自动评分、质量门槛与回归基线；协议、权限、数值与恢复测试使用明确的测试替身。
 
 **未配置模型时可以查看数据和管理资料，任务会明确进入“待处理”。应用没有伪造分析的演示模型回退。**
 
@@ -194,12 +194,17 @@ npm run build
 真实模型评测同样只使用独立 PostgreSQL 测试库，需要已经配置可用模型，会产生实际模型调用费用：
 
 ```powershell
-docker compose -f docker-compose.test.yml run --rm agent-evaluation --list
-docker compose -f docker-compose.test.yml run --rm agent-evaluation --case D01,D02,D03 --repeat 5
-docker compose -f docker-compose.test.yml run --rm agent-evaluation --repeat 3
+docker compose -f docker-compose.test.yml run --rm agent-evaluation python -m app.evaluation --list
+docker compose -f docker-compose.test.yml run --rm agent-evaluation python -m app.evaluation --case D01,D02,D03 --repeat 5
+docker compose -f docker-compose.test.yml run --rm agent-evaluation python -m app.evaluation --repeat 1
+
+# 人工核对通过报告后写入自动评分基线
+docker compose -f docker-compose.test.yml run --rm agent-evaluation python -m app.evaluation --write-baseline
 ```
 
-每次评测会清空并重新创建独立 PostgreSQL 测试库中的应用表和模拟经营表，输出到 `evaluation-reports/<UTC时间>/`；不会使用或修改正在运行的应用数据。报告保存计划、工具观察、预算和答案。模型声称完成仅是机械指标，质量通过率必须在人工核对数值、证据和目标覆盖后统计。
+Plan-and-Execute 评测集位于 `backend/evaluation/agent/v1/`：`cases.json` 保存场景、目标和确定性验收条件，`manifest.json` 定义质量门槛。自动评分检查任务状态、回答、证据、成果、禁用工具和子 Agent 路由；数值结论、证据解释和目标覆盖仍保留在报告的 `human_review` 中供人工复核。
+
+每次评测会清空并重新创建独立 PostgreSQL 测试库中的应用表和模拟经营表，输出到 `evaluation-reports/agent-<UTC时间>/`；不会使用或修改正在运行的应用数据。报告保存计划、工具观察、预算、答案、逐项自动评分和人工复核字段。
 
 ## 运行约束
 
