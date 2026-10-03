@@ -1,5 +1,5 @@
 {
-  "version": "v1",
+  "version": "v2",
   "top_k": 5,
   "documents": [
     {"id": "after_sales", "title": "青松系列售后政策", "path": "documents/售后政策.md"},

@@ -1,0 +1,16 @@
+{
+  "version": "v2",
+  "history_top_k": 4,
+  "quality_gates": {
+    "constraint_accuracy": {"minimum": 1.0},
+    "context_required_recall": {"minimum": 1.0},
+    "context_leakage_rate": {"maximum": 0.0},
+    "long_term_memory_recall": {"minimum": 1.0},
+    "history_unit_recall_at_4": {"minimum": 1.0},
+    "history_anchor_recall_at_4": {"minimum": 1.0},
+    "history_cross_task_leakage_rate": {"maximum": 0.0},
+    "lifecycle_success_rate": {"minimum": 1.0},
+    "summary_required_coverage": {"minimum": 1.0},
+    "summary_invention_rate": {"maximum": 0.0}
+  }
+}

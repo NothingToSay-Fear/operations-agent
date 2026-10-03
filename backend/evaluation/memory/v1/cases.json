@@ -1,0 +1,992 @@
+{
+  "cases": [
+    {
+      "id": "context-channel-override",
+      "kind": "context",
+      "messages": [
+        "分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "本轮只分析渠道的GMV，给出2条建议，并引用证据。"
+      ],
+      "memories": [
+        {
+          "id": "mem-table",
+          "kind": "answer_preference",
+          "content": "回答运营分析时优先使用表格。",
+          "status": "active"
+        },
+        {
+          "id": "candidate-private",
+          "kind": "analysis_preference",
+          "content": "候选记忆不允许进入模型上下文。",
+          "status": "pending"
+        }
+      ],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "paid_gmv"
+          ],
+          "dimensions": [
+            "channel"
+          ],
+          "recommendation_count": 2,
+          "evidence_required": true
+        },
+        "required_memory_ids": [
+          "mem-table"
+        ],
+        "excluded_memory_ids": [
+          "candidate-private"
+        ]
+      }
+    },
+    {
+      "id": "context-current-instruction-wins",
+      "kind": "context",
+      "messages": [
+        "分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "本轮只分析渠道的GMV，给出2条建议，并引用证据。"
+      ],
+      "memories": [
+        {
+          "id": "mem-format",
+          "kind": "answer_preference",
+          "content": "回答优先给出简洁表格。",
+          "status": "active"
+        }
+      ],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "paid_gmv"
+          ],
+          "dimensions": [
+            "channel"
+          ],
+          "recommendation_count": 2,
+          "evidence_required": true
+        },
+        "required_memory_ids": [
+          "mem-format"
+        ],
+        "excluded_memory_ids": []
+      }
+    },
+    {
+      "id": "context-inventory-evidence",
+      "kind": "context",
+      "messages": [
+        "分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "本轮只分析库存的GMV，给出3条建议，并引用证据。"
+      ],
+      "memories": [
+        {
+          "id": "mem-inventory",
+          "kind": "answer_preference",
+          "content": "库存分析回答需先列出交期。",
+          "status": "active"
+        }
+      ],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "paid_gmv"
+          ],
+          "dimensions": [
+            "inventory"
+          ],
+          "recommendation_count": 3,
+          "evidence_required": true
+        },
+        "required_memory_ids": [
+          "mem-inventory"
+        ],
+        "excluded_memory_ids": []
+      }
+    },
+    {
+      "id": "context-product-evidence",
+      "kind": "context",
+      "messages": [
+        "分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "本轮只分析商品的退款金额，给出2条建议，并引用证据。"
+      ],
+      "memories": [
+        {
+          "id": "mem-product",
+          "kind": "answer_preference",
+          "content": "商品分析建议使用表格交付。",
+          "status": "active"
+        }
+      ],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "refund_amount"
+          ],
+          "dimensions": [
+            "product"
+          ],
+          "recommendation_count": 2,
+          "evidence_required": true
+        },
+        "required_memory_ids": [
+          "mem-product"
+        ],
+        "excluded_memory_ids": []
+      }
+    },
+    {
+      "id": "context-channel-evidence",
+      "kind": "context",
+      "messages": [
+        "分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "本轮只分析渠道的销量，给出4条建议，并引用证据。"
+      ],
+      "memories": [
+        {
+          "id": "mem-channel",
+          "kind": "answer_preference",
+          "content": "渠道分析回答要保留证据链接。",
+          "status": "active"
+        }
+      ],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "units"
+          ],
+          "dimensions": [
+            "channel"
+          ],
+          "recommendation_count": 4,
+          "evidence_required": true
+        },
+        "required_memory_ids": [
+          "mem-channel"
+        ],
+        "excluded_memory_ids": []
+      }
+    },
+    {
+      "id": "context-gmv-channel-two",
+      "kind": "context",
+      "messages": [
+        "先分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "请改为本轮只分析渠道的GMV，输出2条建议，并引用证据。"
+      ],
+      "memories": [],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "paid_gmv"
+          ],
+          "dimensions": [
+            "channel"
+          ],
+          "recommendation_count": 2,
+          "evidence_required": true
+        },
+        "required_memory_ids": [],
+        "excluded_memory_ids": []
+      }
+    },
+    {
+      "id": "context-gmv-product-three",
+      "kind": "context",
+      "messages": [
+        "先分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "请改为本轮只分析商品的GMV，输出3条建议，并引用证据。"
+      ],
+      "memories": [],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "paid_gmv"
+          ],
+          "dimensions": [
+            "product"
+          ],
+          "recommendation_count": 3,
+          "evidence_required": true
+        },
+        "required_memory_ids": [],
+        "excluded_memory_ids": []
+      }
+    },
+    {
+      "id": "context-gmv-inventory-four",
+      "kind": "context",
+      "messages": [
+        "先分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "请改为本轮只分析库存的GMV，输出4条建议，并引用证据。"
+      ],
+      "memories": [],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "paid_gmv"
+          ],
+          "dimensions": [
+            "inventory"
+          ],
+          "recommendation_count": 4,
+          "evidence_required": true
+        },
+        "required_memory_ids": [],
+        "excluded_memory_ids": []
+      }
+    },
+    {
+      "id": "context-refund-channel-three",
+      "kind": "context",
+      "messages": [
+        "先分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "请改为本轮只分析渠道的退款金额，输出3条建议，并引用证据。"
+      ],
+      "memories": [],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "refund_amount"
+          ],
+          "dimensions": [
+            "channel"
+          ],
+          "recommendation_count": 3,
+          "evidence_required": true
+        },
+        "required_memory_ids": [],
+        "excluded_memory_ids": []
+      }
+    },
+    {
+      "id": "context-refund-product-four",
+      "kind": "context",
+      "messages": [
+        "先分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "请改为本轮只分析商品的退款金额，输出4条建议，并引用证据。"
+      ],
+      "memories": [],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "refund_amount"
+          ],
+          "dimensions": [
+            "product"
+          ],
+          "recommendation_count": 4,
+          "evidence_required": true
+        },
+        "required_memory_ids": [],
+        "excluded_memory_ids": []
+      }
+    },
+    {
+      "id": "context-refund-inventory-two",
+      "kind": "context",
+      "messages": [
+        "先分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "请改为本轮只分析库存的退款金额，输出2条建议，并引用证据。"
+      ],
+      "memories": [],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "refund_amount"
+          ],
+          "dimensions": [
+            "inventory"
+          ],
+          "recommendation_count": 2,
+          "evidence_required": true
+        },
+        "required_memory_ids": [],
+        "excluded_memory_ids": []
+      }
+    },
+    {
+      "id": "context-units-channel-four",
+      "kind": "context",
+      "messages": [
+        "先分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "请改为本轮只分析渠道的销量，输出4条建议，并引用证据。"
+      ],
+      "memories": [],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "units"
+          ],
+          "dimensions": [
+            "channel"
+          ],
+          "recommendation_count": 4,
+          "evidence_required": true
+        },
+        "required_memory_ids": [],
+        "excluded_memory_ids": []
+      }
+    },
+    {
+      "id": "context-units-product-two",
+      "kind": "context",
+      "messages": [
+        "先分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "请改为本轮只分析商品的销量，输出2条建议，并引用证据。"
+      ],
+      "memories": [],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "units"
+          ],
+          "dimensions": [
+            "product"
+          ],
+          "recommendation_count": 2,
+          "evidence_required": true
+        },
+        "required_memory_ids": [],
+        "excluded_memory_ids": []
+      }
+    },
+    {
+      "id": "context-units-inventory-three",
+      "kind": "context",
+      "messages": [
+        "先分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "请改为本轮只分析库存的销量，输出3条建议，并引用证据。"
+      ],
+      "memories": [],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "units"
+          ],
+          "dimensions": [
+            "inventory"
+          ],
+          "recommendation_count": 3,
+          "evidence_required": true
+        },
+        "required_memory_ids": [],
+        "excluded_memory_ids": []
+      }
+    },
+    {
+      "id": "context-profit-channel-two",
+      "kind": "context",
+      "messages": [
+        "先分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "请改为本轮只分析渠道的毛利，输出2条建议，并引用证据。"
+      ],
+      "memories": [],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "gross_profit_before_refunds"
+          ],
+          "dimensions": [
+            "channel"
+          ],
+          "recommendation_count": 2,
+          "evidence_required": true
+        },
+        "required_memory_ids": [],
+        "excluded_memory_ids": []
+      }
+    },
+    {
+      "id": "context-profit-product-three",
+      "kind": "context",
+      "messages": [
+        "先分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "请改为本轮只分析商品的毛利，输出3条建议，并引用证据。"
+      ],
+      "memories": [],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "gross_profit_before_refunds"
+          ],
+          "dimensions": [
+            "product"
+          ],
+          "recommendation_count": 3,
+          "evidence_required": true
+        },
+        "required_memory_ids": [],
+        "excluded_memory_ids": []
+      }
+    },
+    {
+      "id": "context-profit-inventory-four",
+      "kind": "context",
+      "messages": [
+        "先分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "请改为本轮只分析库存的毛利，输出4条建议，并引用证据。"
+      ],
+      "memories": [],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "gross_profit_before_refunds"
+          ],
+          "dimensions": [
+            "inventory"
+          ],
+          "recommendation_count": 4,
+          "evidence_required": true
+        },
+        "required_memory_ids": [],
+        "excluded_memory_ids": []
+      }
+    },
+    {
+      "id": "context-channel-revised-count",
+      "kind": "context",
+      "messages": [
+        "先分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "请改为本轮只分析渠道的GMV，输出5条建议，并引用证据。"
+      ],
+      "memories": [],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "paid_gmv"
+          ],
+          "dimensions": [
+            "channel"
+          ],
+          "recommendation_count": 5,
+          "evidence_required": true
+        },
+        "required_memory_ids": [],
+        "excluded_memory_ids": []
+      }
+    },
+    {
+      "id": "context-product-revised-count",
+      "kind": "context",
+      "messages": [
+        "先分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "请改为本轮只分析商品的退款金额，输出5条建议，并引用证据。"
+      ],
+      "memories": [],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "refund_amount"
+          ],
+          "dimensions": [
+            "product"
+          ],
+          "recommendation_count": 5,
+          "evidence_required": true
+        },
+        "required_memory_ids": [],
+        "excluded_memory_ids": []
+      }
+    },
+    {
+      "id": "context-inventory-revised-count",
+      "kind": "context",
+      "messages": [
+        "先分析渠道、商品和库存的 GMV、销量、退款金额与毛利，给出三条建议。",
+        "请改为本轮只分析库存的销量，输出5条建议，并引用证据。"
+      ],
+      "memories": [],
+      "expected": {
+        "constraints": {
+          "metrics": [
+            "units"
+          ],
+          "dimensions": [
+            "inventory"
+          ],
+          "recommendation_count": 5,
+          "evidence_required": true
+        },
+        "required_memory_ids": [],
+        "excluded_memory_ids": []
+      }
+    },
+    {
+      "id": "history-cutoff",
+      "kind": "history",
+      "messages": [
+        "统计截止日期为 2026-09-28，所有周度比较均以该日期为准。",
+        "这是同一任务中的补充说明，请继续保留对应边界。",
+        "其他无关指标可以在后续任务再分析。"
+      ],
+      "query": "沿用刚才的统计截止日期做周度比较。",
+      "expected": {
+        "anchor": "统计截止日期为 2026-09-28，所有周度比较均以该日期为准。",
+        "cross_task_anchor": "跨任务隔离标记：2030-01-01"
+      }
+    },
+    {
+      "id": "history-channel-scope",
+      "kind": "history",
+      "messages": [
+        "本轮只分析渠道，不再展开商品 SKU；建议数量调整为两条。",
+        "这是同一任务中的补充说明，请继续保留对应边界。",
+        "其他无关指标可以在后续任务再分析。"
+      ],
+      "query": "刚才限定的分析维度和建议数量是什么？",
+      "expected": {
+        "anchor": "本轮只分析渠道，不再展开商品 SKU；建议数量调整为两条。",
+        "cross_task_anchor": "跨任务隔离标记：2030-01-01"
+      }
+    },
+    {
+      "id": "history-product-scope",
+      "kind": "history",
+      "messages": [
+        "商品分析只看 SKU-0001 至 SKU-0010，不扩展到其他 SKU。",
+        "这是同一任务中的补充说明，请继续保留对应边界。",
+        "其他无关指标可以在后续任务再分析。"
+      ],
+      "query": "商品分析的 SKU 范围是什么？",
+      "expected": {
+        "anchor": "商品分析只看 SKU-0001 至 SKU-0010，不扩展到其他 SKU。",
+        "cross_task_anchor": "跨任务隔离标记：2030-01-01"
+      }
+    },
+    {
+      "id": "history-inventory-assumption",
+      "kind": "history",
+      "messages": [
+        "库存预测按未来十四天日均销量计算，已确认在途库存需要扣除。",
+        "这是同一任务中的补充说明，请继续保留对应边界。",
+        "其他无关指标可以在后续任务再分析。"
+      ],
+      "query": "补货预测的需求和在途口径是什么？",
+      "expected": {
+        "anchor": "库存预测按未来十四天日均销量计算，已确认在途库存需要扣除。",
+        "cross_task_anchor": "跨任务隔离标记：2030-01-01"
+      }
+    },
+    {
+      "id": "history-refund-date",
+      "kind": "history",
+      "messages": [
+        "退款金额统一按照实际到账日归属，不按申请日统计。",
+        "这是同一任务中的补充说明，请继续保留对应边界。",
+        "其他无关指标可以在后续任务再分析。"
+      ],
+      "query": "退款金额应按什么日期统计？",
+      "expected": {
+        "anchor": "退款金额统一按照实际到账日归属，不按申请日统计。",
+        "cross_task_anchor": "跨任务隔离标记：2030-01-01"
+      }
+    },
+    {
+      "id": "history-gmv-definition",
+      "kind": "history",
+      "messages": [
+        "支付商品 GMV 不包含运费，也不扣退款。",
+        "这是同一任务中的补充说明，请继续保留对应边界。",
+        "其他无关指标可以在后续任务再分析。"
+      ],
+      "query": "本次 GMV 的运费与退款口径是什么？",
+      "expected": {
+        "anchor": "支付商品 GMV 不包含运费，也不扣退款。",
+        "cross_task_anchor": "跨任务隔离标记：2030-01-01"
+      }
+    },
+    {
+      "id": "history-channel-refund",
+      "kind": "history",
+      "messages": [
+        "渠道分析必须单列退款金额和退款率，不能只看支付 GMV。",
+        "这是同一任务中的补充说明，请继续保留对应边界。",
+        "其他无关指标可以在后续任务再分析。"
+      ],
+      "query": "渠道分析要补充哪些退款维度？",
+      "expected": {
+        "anchor": "渠道分析必须单列退款金额和退款率，不能只看支付 GMV。",
+        "cross_task_anchor": "跨任务隔离标记：2030-01-01"
+      }
+    },
+    {
+      "id": "history-activity-unconfirmed",
+      "kind": "history",
+      "messages": [
+        "秋日回馈活动的叠加规则尚未确认，回答中不得当作既定事实。",
+        "这是同一任务中的补充说明，请继续保留对应边界。",
+        "其他无关指标可以在后续任务再分析。"
+      ],
+      "query": "活动叠加规则当前能否直接引用？",
+      "expected": {
+        "anchor": "秋日回馈活动的叠加规则尚未确认，回答中不得当作既定事实。",
+        "cross_task_anchor": "跨任务隔离标记：2030-01-01"
+      }
+    },
+    {
+      "id": "history-evidence-required",
+      "kind": "history",
+      "messages": [
+        "每条运营建议都要附带可打开的证据链接和数据口径。",
+        "这是同一任务中的补充说明，请继续保留对应边界。",
+        "其他无关指标可以在后续任务再分析。"
+      ],
+      "query": "建议交付时需要包含什么证据？",
+      "expected": {
+        "anchor": "每条运营建议都要附带可打开的证据链接和数据口径。",
+        "cross_task_anchor": "跨任务隔离标记：2030-01-01"
+      }
+    },
+    {
+      "id": "history-supplier-lead-time",
+      "kind": "history",
+      "messages": [
+        "白鹭供应商交期为二十一天，活动前仍需确认产能。",
+        "这是同一任务中的补充说明，请继续保留对应边界。",
+        "其他无关指标可以在后续任务再分析。"
+      ],
+      "query": "白鹭供应商的交期和前置确认要求是什么？",
+      "expected": {
+        "anchor": "白鹭供应商交期为二十一天，活动前仍需确认产能。",
+        "cross_task_anchor": "跨任务隔离标记：2030-01-01"
+      }
+    },
+    {
+      "id": "history-moq",
+      "kind": "history",
+      "messages": [
+        "补货建议必须注明最小订货量二十件，不足时按二十件起订。",
+        "这是同一任务中的补充说明，请继续保留对应边界。",
+        "其他无关指标可以在后续任务再分析。"
+      ],
+      "query": "补货建议的最小订货量规则是什么？",
+      "expected": {
+        "anchor": "补货建议必须注明最小订货量二十件，不足时按二十件起订。",
+        "cross_task_anchor": "跨任务隔离标记：2030-01-01"
+      }
+    },
+    {
+      "id": "history-promotion-margin",
+      "kind": "history",
+      "messages": [
+        "促销折扣后毛利率不得低于百分之二十五，运费需另行评估。",
+        "这是同一任务中的补充说明，请继续保留对应边界。",
+        "其他无关指标可以在后续任务再分析。"
+      ],
+      "query": "促销建议的毛利与运费约束是什么？",
+      "expected": {
+        "anchor": "促销折扣后毛利率不得低于百分之二十五，运费需另行评估。",
+        "cross_task_anchor": "跨任务隔离标记：2030-01-01"
+      }
+    },
+    {
+      "id": "history-knowledge-only",
+      "kind": "history",
+      "messages": [
+        "本轮回答的资料来源限制：仅引用用户启用的知识库资料，不使用业务接口和未启用文件。",
+        "这是同一任务中的补充说明，请继续保留对应边界。",
+        "其他无关指标可以在后续任务再分析。"
+      ],
+      "query": "本轮资料来源限制是什么，是否只能引用启用知识库资料？",
+      "expected": {
+        "anchor": "本轮回答的资料来源限制：仅引用用户启用的知识库资料，不使用业务接口和未启用文件。",
+        "cross_task_anchor": "跨任务隔离标记：2030-01-01"
+      }
+    },
+    {
+      "id": "history-format-table",
+      "kind": "history",
+      "messages": [
+        "最终结果输出格式为简洁表格，先给结论，再列证据和待验证项。",
+        "这是同一任务中的补充说明，请继续保留对应边界。",
+        "其他无关指标可以在后续任务再分析。"
+      ],
+      "query": "本轮最终结果的输出格式是什么，如何排列结论、证据和待验证项？",
+      "expected": {
+        "anchor": "最终结果输出格式为简洁表格，先给结论，再列证据和待验证项。",
+        "cross_task_anchor": "跨任务隔离标记：2030-01-01"
+      }
+    },
+    {
+      "id": "history-no-causality",
+      "kind": "history",
+      "messages": [
+        "退款波动只能描述相关性，不能直接归因于商品质量。",
+        "这是同一任务中的补充说明，请继续保留对应边界。",
+        "其他无关指标可以在后续任务再分析。"
+      ],
+      "query": "退款变化在结论中可以直接说明什么因果吗？",
+      "expected": {
+        "anchor": "退款波动只能描述相关性，不能直接归因于商品质量。",
+        "cross_task_anchor": "跨任务隔离标记：2030-01-01"
+      }
+    },
+    {
+      "id": "summary-channel-scope",
+      "kind": "summary",
+      "messages": [
+        "数据截止日期为 2026-09-28。",
+        "先分析渠道和商品，给出三条建议。",
+        "后续只分析渠道，建议改为两条。",
+        "活动规则尚未确认，不要当成事实。",
+        "仍需补充渠道退款维度。",
+        "请保留已确认约束。",
+        "证据不足时列出待验证项。",
+        "不要把相关性写成因果。",
+        "最终使用简洁表格。",
+        "继续等待业务数据返回。"
+      ],
+      "expected": {
+        "must_retain": [
+          "数据截止日期为 2026-09-28",
+          "只分析渠道",
+          "建议改为两条",
+          "活动规则尚未确认",
+          "渠道退款维度"
+        ],
+        "must_not_invent": [
+          "GMV 增长 30%",
+          "活动折扣 50%"
+        ]
+      }
+    },
+    {
+      "id": "summary-inventory-scope",
+      "kind": "summary",
+      "messages": [
+        "数据截止日期为 2026-09-28。",
+        "后续只分析库存和确认在途，不分析商品卖点。",
+        "补货建议调整为三条。",
+        "供应商交期尚未确认，不得当作已到货。",
+        "每条建议需要写明最小订货量。",
+        "请保留已确认约束。",
+        "证据不足时列出待验证项。",
+        "不要把相关性写成因果。",
+        "最终使用简洁表格。",
+        "继续等待业务数据返回。"
+      ],
+      "expected": {
+        "must_retain": [
+          "数据截止日期为 2026-09-28",
+          "只分析库存和确认在途",
+          "补货建议调整为三条",
+          "供应商交期尚未确认",
+          "最小订货量"
+        ],
+        "must_not_invent": [
+          "库存一定缺货",
+          "供应商已到货"
+        ]
+      }
+    },
+    {
+      "id": "summary-knowledge-scope",
+      "kind": "summary",
+      "messages": [
+        "本轮只引用启用的知识库资料。",
+        "不使用业务接口或未启用文件。",
+        "活动折扣尚未确认，需要明确标注。",
+        "结果只回答活动规则，不分析活动效果。",
+        "缺失字段要列为待补充项。",
+        "请保留已确认约束。",
+        "证据不足时列出待验证项。",
+        "不要把相关性写成因果。",
+        "最终使用简洁表格。",
+        "继续等待业务数据返回。"
+      ],
+      "expected": {
+        "must_retain": [
+          "只引用启用的知识库资料",
+          "不使用业务接口或未启用文件",
+          "活动折扣尚未确认",
+          "只回答活动规则",
+          "待补充项"
+        ],
+        "must_not_invent": [
+          "折扣是五折",
+          "活动效果提升"
+        ]
+      }
+    },
+    {
+      "id": "summary-product-scope",
+      "kind": "summary",
+      "messages": [
+        "统计截止日期为 2026-09-28。",
+        "本轮只分析商品，不展开渠道数据。",
+        "建议数量固定为两条。",
+        "商品成本字段尚未确认，不能编造毛利。",
+        "每条建议要引用商品维度证据。",
+        "请保留已确认约束。",
+        "证据不足时列出待验证项。",
+        "不要把相关性写成因果。",
+        "最终使用简洁表格。",
+        "继续等待业务数据返回。"
+      ],
+      "expected": {
+        "must_retain": [
+          "统计截止日期为 2026-09-28",
+          "只分析商品",
+          "建议数量固定为两条",
+          "商品成本字段尚未确认",
+          "引用商品维度证据"
+        ],
+        "must_not_invent": [
+          "毛利率为40%",
+          "渠道转化提升"
+        ]
+      }
+    },
+    {
+      "id": "summary-refund-scope",
+      "kind": "summary",
+      "messages": [
+        "退款统一按实际到账日统计。",
+        "本轮只分析渠道退款，不回答 GMV 增长归因。",
+        "输出三条可执行建议。",
+        "退款原因字段尚未确认，不能推断商品质量。",
+        "需要说明数据截止口径。",
+        "请保留已确认约束。",
+        "证据不足时列出待验证项。",
+        "不要把相关性写成因果。",
+        "最终使用简洁表格。",
+        "继续等待业务数据返回。"
+      ],
+      "expected": {
+        "must_retain": [
+          "退款统一按实际到账日统计",
+          "只分析渠道退款",
+          "输出三条可执行建议",
+          "退款原因字段尚未确认",
+          "说明数据截止口径"
+        ],
+        "must_not_invent": [
+          "商品质量下降",
+          "GMV 增长20%"
+        ]
+      }
+    },
+    {
+      "id": "lifecycle-confirm-disable-01",
+      "kind": "lifecycle",
+      "messages": [
+        "分析库存补货风险。"
+      ],
+      "memory": {
+        "kind": "answer_preference",
+        "content": "回答库存问题时优先说明交期。"
+      },
+      "expected": {}
+    },
+    {
+      "id": "lifecycle-confirm-disable-02",
+      "kind": "lifecycle",
+      "messages": [
+        "分析渠道 GMV 变化。"
+      ],
+      "memory": {
+        "kind": "answer_preference",
+        "content": "回答渠道问题时优先使用表格。"
+      },
+      "expected": {}
+    },
+    {
+      "id": "lifecycle-confirm-disable-03",
+      "kind": "lifecycle",
+      "messages": [
+        "分析商品退款原因。"
+      ],
+      "memory": {
+        "kind": "answer_preference",
+        "content": "回答退款问题时先列出数据口径。"
+      },
+      "expected": {}
+    },
+    {
+      "id": "lifecycle-confirm-disable-04",
+      "kind": "lifecycle",
+      "messages": [
+        "制定促销建议。"
+      ],
+      "memory": {
+        "kind": "answer_preference",
+        "content": "促销建议回答时优先说明毛利约束。"
+      },
+      "expected": {}
+    },
+    {
+      "id": "lifecycle-confirm-disable-05",
+      "kind": "lifecycle",
+      "messages": [
+        "分析活动规则资料。"
+      ],
+      "memory": {
+        "kind": "answer_preference",
+        "content": "活动规则回答时优先引用知识库。"
+      },
+      "expected": {}
+    },
+    {
+      "id": "lifecycle-confirm-disable-06",
+      "kind": "lifecycle",
+      "messages": [
+        "分析库存补货风险。"
+      ],
+      "memory": {
+        "kind": "work_profile",
+        "content": "我是负责库存补货的运营人员。"
+      },
+      "expected": {}
+    },
+    {
+      "id": "lifecycle-confirm-disable-07",
+      "kind": "lifecycle",
+      "messages": [
+        "分析渠道 GMV 变化。"
+      ],
+      "memory": {
+        "kind": "work_profile",
+        "content": "我负责渠道投放和渠道运营。"
+      },
+      "expected": {}
+    },
+    {
+      "id": "lifecycle-confirm-disable-08",
+      "kind": "lifecycle",
+      "messages": [
+        "分析商品退款原因。"
+      ],
+      "memory": {
+        "kind": "work_profile",
+        "content": "我负责商品运营和售后分析。"
+      },
+      "expected": {}
+    },
+    {
+      "id": "lifecycle-confirm-disable-09",
+      "kind": "lifecycle",
+      "messages": [
+        "制定促销建议。"
+      ],
+      "memory": {
+        "kind": "work_profile",
+        "content": "我负责活动促销和毛利控制。"
+      },
+      "expected": {}
+    },
+    {
+      "id": "lifecycle-confirm-disable-10",
+      "kind": "lifecycle",
+      "messages": [
+        "分析活动规则资料。"
+      ],
+      "memory": {
+        "kind": "work_profile",
+        "content": "我负责营销活动规则整理。"
+      },
+      "expected": {}
+    }
+  ]
+}

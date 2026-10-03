@@ -1,0 +1,488 @@
+{
+  "cases": [
+    {
+      "id": "after-sales-unopened-window",
+      "question": "青松未拆封商品签收后多久能申请无理由退货？",
+      "expected_document_ids": [
+        "after_sales"
+      ],
+      "expected_anchors": [
+        "签收之日起七天内"
+      ]
+    },
+    {
+      "id": "after-sales-opened-food",
+      "question": "食品拆封后还能按无理由退货处理吗？",
+      "expected_document_ids": [
+        "after_sales"
+      ],
+      "expected_anchors": [
+        "已拆封食品不支持无理由退货"
+      ]
+    },
+    {
+      "id": "after-sales-quality-evidence",
+      "question": "青松商品质量问题售后需要保留批次号和照片吗？",
+      "expected_document_ids": [
+        "after_sales"
+      ],
+      "expected_anchors": [
+        "保留批次号和照片"
+      ]
+    },
+    {
+      "id": "after-sales-return-condition",
+      "question": "青松系列退货是否要求商品未拆封？",
+      "expected_document_ids": [
+        "after_sales"
+      ],
+      "expected_anchors": [
+        "未拆封商品"
+      ]
+    },
+    {
+      "id": "after-sales-seven-days",
+      "question": "无理由退货的七天从下单日还是签收日开始计算？",
+      "expected_document_ids": [
+        "after_sales"
+      ],
+      "expected_anchors": [
+        "签收之日起七天内"
+      ]
+    },
+    {
+      "id": "replenishment-trigger",
+      "question": "库存覆盖天数低于多少天时需要启动补货评估？",
+      "expected_document_ids": [
+        "replenishment"
+      ],
+      "expected_anchors": [
+        "库存覆盖天数低于十四天时启动补货评估"
+      ]
+    },
+    {
+      "id": "replenishment-demand-basis",
+      "question": "补货评估应按什么销量口径估算？",
+      "expected_document_ids": [
+        "replenishment"
+      ],
+      "expected_anchors": [
+        "按未来日均销量估算"
+      ]
+    },
+    {
+      "id": "replenishment-lead-time",
+      "question": "标准采购交期是多少天？",
+      "expected_document_ids": [
+        "replenishment"
+      ],
+      "expected_anchors": [
+        "十天"
+      ]
+    },
+    {
+      "id": "replenishment-lead-confirmation",
+      "question": "采购交期在什么条件满足后执行？",
+      "expected_document_ids": [
+        "replenishment"
+      ],
+      "expected_anchors": [
+        "供应商确认后执行"
+      ]
+    },
+    {
+      "id": "replenishment-moq",
+      "question": "补货的最小订货量是多少件？",
+      "expected_document_ids": [
+        "replenishment"
+      ],
+      "expected_anchors": [
+        "二十件"
+      ]
+    },
+    {
+      "id": "replenishment-in-transit",
+      "question": "计算补货缺口时已经确认的在途库存怎么处理？",
+      "expected_document_ids": [
+        "replenishment"
+      ],
+      "expected_anchors": [
+        "扣除已确认在途数量"
+      ]
+    },
+    {
+      "id": "copy-title-fields",
+      "question": "商品标题必须包含哪些基础信息？",
+      "expected_document_ids": [
+        "product_copy"
+      ],
+      "expected_anchors": [
+        "品类、净含量和口味"
+      ]
+    },
+    {
+      "id": "copy-no-medical-claim",
+      "question": "没有检测依据时，文案能宣传治疗疾病吗？",
+      "expected_document_ids": [
+        "product_copy"
+      ],
+      "expected_anchors": [
+        "禁止宣称治疗疾病"
+      ]
+    },
+    {
+      "id": "copy-blood-sugar",
+      "question": "没有检测证据时可以说商品降低血糖吗？",
+      "expected_document_ids": [
+        "product_copy"
+      ],
+      "expected_anchors": [
+        "降低血糖"
+      ]
+    },
+    {
+      "id": "copy-verifiable-selling-point",
+      "question": "商品卖点应该基于什么信息编写？",
+      "expected_document_ids": [
+        "product_copy"
+      ],
+      "expected_anchors": [
+        "可验证属性"
+      ]
+    },
+    {
+      "id": "copy-no-invention",
+      "question": "商品卖点能否编造功效，还是不得编造功效？",
+      "expected_document_ids": [
+        "product_copy"
+      ],
+      "expected_anchors": [
+        "不得编造功效"
+      ]
+    },
+    {
+      "id": "promotion-margin-floor",
+      "question": "活动折扣后的毛利率最低要求是多少？",
+      "expected_document_ids": [
+        "promotion"
+      ],
+      "expected_anchors": [
+        "毛利率不得低于百分之二十五"
+      ]
+    },
+    {
+      "id": "promotion-coupon-stack",
+      "question": "优惠券和直降是否可以叠加？",
+      "expected_document_ids": [
+        "promotion"
+      ],
+      "expected_anchors": [
+        "优惠券和直降可以叠加"
+      ]
+    },
+    {
+      "id": "promotion-price-calculation",
+      "question": "叠加优惠时要计算哪些价格和利润字段？",
+      "expected_document_ids": [
+        "promotion"
+      ],
+      "expected_anchors": [
+        "实际到手价与毛利"
+      ]
+    },
+    {
+      "id": "promotion-shipping-cost",
+      "question": "促销核算中发货运费如何处理？",
+      "expected_document_ids": [
+        "promotion"
+      ],
+      "expected_anchors": [
+        "发货运费另行评估"
+      ]
+    },
+    {
+      "id": "promotion-margin-after-discount",
+      "question": "为了促销把毛利降到20%是否符合规则？",
+      "expected_document_ids": [
+        "promotion"
+      ],
+      "expected_anchors": [
+        "毛利率不得低于百分之二十五"
+      ]
+    },
+    {
+      "id": "warehouse-fefo",
+      "question": "食品仓储出库采用什么原则？",
+      "expected_document_ids": [
+        "warehouse"
+      ],
+      "expected_anchors": [
+        "先到期先出"
+      ]
+    },
+    {
+      "id": "warehouse-expiry-isolation",
+      "question": "保质期不足30天的商品应怎样处理？",
+      "expected_document_ids": [
+        "warehouse"
+      ],
+      "expected_anchors": [
+        "单独隔离并审核"
+      ]
+    },
+    {
+      "id": "warehouse-expiry-promotion",
+      "question": "临近保质期食品可直接参加常规促销吗？",
+      "expected_document_ids": [
+        "warehouse"
+      ],
+      "expected_anchors": [
+        "不直接参加常规促销"
+      ]
+    },
+    {
+      "id": "warehouse-inventory-count",
+      "question": "仓库盘点出现差异后由谁核查？",
+      "expected_document_ids": [
+        "warehouse"
+      ],
+      "expected_anchors": [
+        "仓库负责人核查"
+      ]
+    },
+    {
+      "id": "logistics-ship-time",
+      "question": "常规订单付款后多久发货？",
+      "expected_document_ids": [
+        "logistics"
+      ],
+      "expected_anchors": [
+        "四十八小时内发货"
+      ]
+    },
+    {
+      "id": "logistics-remote-delivery",
+      "question": "偏远地区配送时效是多少天？",
+      "expected_document_ids": [
+        "logistics"
+      ],
+      "expected_anchors": [
+        "五至七天"
+      ]
+    },
+    {
+      "id": "logistics-holiday-delay",
+      "question": "节假日配送延迟需要在哪里说明？",
+      "expected_document_ids": [
+        "logistics"
+      ],
+      "expected_anchors": [
+        "在活动方案中说明"
+      ]
+    },
+    {
+      "id": "logistics-payment-start",
+      "question": "发货时效从付款还是下单开始计算？",
+      "expected_document_ids": [
+        "logistics"
+      ],
+      "expected_anchors": [
+        "付款后四十八小时内发货"
+      ]
+    },
+    {
+      "id": "finance-paid-gmv-shipping",
+      "question": "支付商品GMV包含运费吗？",
+      "expected_document_ids": [
+        "finance"
+      ],
+      "expected_anchors": [
+        "不包含运费"
+      ]
+    },
+    {
+      "id": "finance-paid-gmv-refund",
+      "question": "支付商品GMV计算时是否扣除退款？",
+      "expected_document_ids": [
+        "finance"
+      ],
+      "expected_anchors": [
+        "不扣退款"
+      ]
+    },
+    {
+      "id": "finance-refund-date",
+      "question": "退款应按照什么日期统计？",
+      "expected_document_ids": [
+        "finance"
+      ],
+      "expected_anchors": [
+        "实际到账日统计"
+      ]
+    },
+    {
+      "id": "finance-visitor-deduplicate",
+      "question": "周期访客应如何计算，能直接累计每日访客吗？",
+      "expected_document_ids": [
+        "finance"
+      ],
+      "expected_anchors": [
+        "按访客标识去重"
+      ]
+    },
+    {
+      "id": "finance-visitor-no-sum",
+      "question": "为什么不能把每天的访客数直接相加？",
+      "expected_document_ids": [
+        "finance"
+      ],
+      "expected_anchors": [
+        "不能直接累加每天的访客数"
+      ]
+    },
+    {
+      "id": "advertising-reference-only",
+      "question": "广告平台给出的归因收入可以如何使用？",
+      "expected_document_ids": [
+        "advertising"
+      ],
+      "expected_anchors": [
+        "仅供渠道参考"
+      ]
+    },
+    {
+      "id": "advertising-no-direct-sum",
+      "question": "多个渠道都归因同一订单时，可以直接相加吗？",
+      "expected_document_ids": [
+        "advertising"
+      ],
+      "expected_anchors": [
+        "不得直接相加"
+      ]
+    },
+    {
+      "id": "advertising-actual-gmv",
+      "question": "广告平台归因收入能否直接作为实际商品成交额？",
+      "expected_document_ids": [
+        "advertising"
+      ],
+      "expected_anchors": [
+        "实际商品成交额"
+      ]
+    },
+    {
+      "id": "advertising-same-order",
+      "question": "同一订单被多个广告渠道认领时应避免什么计算错误？",
+      "expected_document_ids": [
+        "advertising"
+      ],
+      "expected_anchors": [
+        "同一订单"
+      ]
+    },
+    {
+      "id": "supplier-lead-time",
+      "question": "白鹭供应商的交货期是多久？",
+      "expected_document_ids": [
+        "supplier"
+      ],
+      "expected_anchors": [
+        "交期为二十一天"
+      ]
+    },
+    {
+      "id": "supplier-capacity-confirm",
+      "question": "活动前需要向供应商确认什么？",
+      "expected_document_ids": [
+        "supplier"
+      ],
+      "expected_anchors": [
+        "确认产能"
+      ]
+    },
+    {
+      "id": "supplier-arrival-not-fact",
+      "question": "供应商未确认前能把预计到货当成已到货吗？",
+      "expected_document_ids": [
+        "supplier"
+      ],
+      "expected_anchors": [
+        "不得把预计到货当成已经到货"
+      ]
+    },
+    {
+      "id": "supplier-before-activity",
+      "question": "活动开始前，供应商侧必须先完成哪项确认？",
+      "expected_document_ids": [
+        "supplier"
+      ],
+      "expected_anchors": [
+        "活动前需要向供应商确认产能"
+      ]
+    },
+    {
+      "id": "packaging-glass-protection",
+      "question": "玻璃瓶发货需要采用哪些防撞包装？",
+      "expected_document_ids": [
+        "packaging"
+      ],
+      "expected_anchors": [
+        "独立缓冲套和防撞隔板"
+      ]
+    },
+    {
+      "id": "packaging-damage-evidence",
+      "question": "运输破损申请处理时要保留哪些照片或物料？",
+      "expected_document_ids": [
+        "packaging"
+      ],
+      "expected_anchors": [
+        "保留外包装与商品照片"
+      ]
+    },
+    {
+      "id": "packaging-net-weight",
+      "question": "包装材料重量是否计入商品净含量？",
+      "expected_document_ids": [
+        "packaging"
+      ],
+      "expected_anchors": [
+        "不计入商品净含量"
+      ]
+    },
+    {
+      "id": "packaging-glass-shipping",
+      "question": "玻璃瓶商品怎么降低运输破损风险？",
+      "expected_document_ids": [
+        "packaging"
+      ],
+      "expected_anchors": [
+        "独立缓冲套和防撞隔板"
+      ]
+    },
+    {
+      "id": "no-answer-orbit",
+      "question": "火星探测器轨道倾角如何计算？",
+      "expected_document_ids": [],
+      "expected_anchors": []
+    },
+    {
+      "id": "no-answer-quantum",
+      "question": "请提供量子计算机纠错码的证明。",
+      "expected_document_ids": [],
+      "expected_anchors": []
+    },
+    {
+      "id": "no-answer-weather",
+      "question": "明天上海的降雨概率是多少？",
+      "expected_document_ids": [],
+      "expected_anchors": []
+    },
+    {
+      "id": "no-answer-programming",
+      "question": "Python asyncio 中如何实现事件循环？",
+      "expected_document_ids": [],
+      "expected_anchors": []
+    }
+  ]
+}

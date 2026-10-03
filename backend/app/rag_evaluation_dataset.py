@@ -56,7 +56,7 @@ def load_rag_evaluation_dataset(root: Path) -> RagEvaluationDataset:
         raise ValueError("manifest.json 的 top_k 必须为 1 到 20 的整数")
     documents = _load_documents(resolved_root, manifest.get("documents"))
     document_ids = {document.id for document in documents}
-    cases = _load_cases(resolved_root / "cases.jsonl", document_ids)
+    cases = _load_cases(resolved_root / "cases.json", document_ids)
     gates = _load_quality_gates(manifest.get("quality_gates"))
     return RagEvaluationDataset(
         root=resolved_root,
@@ -132,17 +132,15 @@ def _load_documents(root: Path, raw_documents: Any) -> list[RagEvaluationDocumen
 def _load_cases(path: Path, document_ids: set[str]) -> list[RagEvaluationCase]:
     if not path.is_file():
         raise ValueError(f"缺少评测问题集：{path}")
+    payload = _read_json(path)
+    rows = payload.get("cases")
+    if not isinstance(rows, list):
+        raise ValueError("cases.json 必须包含 cases 数组")
     cases: list[RagEvaluationCase] = []
     ids: set[str] = set()
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        if not line.strip():
-            continue
-        try:
-            item = json.loads(line)
-        except json.JSONDecodeError as error:
-            raise ValueError(f"{path.name} 第 {line_number} 行不是合法 JSON") from error
+    for index, item in enumerate(rows, start=1):
         if not isinstance(item, dict):
-            raise ValueError(f"{path.name} 第 {line_number} 行必须是对象")
+            raise ValueError(f"{path.name} 第 {index} 个案例必须是对象")
         identifier = _required_text(item, "id", path)
         question = _required_text(item, "question", path)
         expected_document_ids = _string_list(
@@ -151,9 +149,9 @@ def _load_cases(path: Path, document_ids: set[str]) -> list[RagEvaluationCase]:
         expected_anchors = _string_list(item.get("expected_anchors", []), "expected_anchors", path)
         unknown = set(expected_document_ids) - document_ids
         if unknown:
-            raise ValueError(f"{path.name} 第 {line_number} 行引用了未知资料：{', '.join(sorted(unknown))}")
+            raise ValueError(f"{path.name} 第 {index} 个案例引用了未知资料：{', '.join(sorted(unknown))}")
         if bool(expected_document_ids) != bool(expected_anchors):
-            raise ValueError(f"{path.name} 第 {line_number} 行的目标资料与文本锚点必须同时存在或同时为空")
+            raise ValueError(f"{path.name} 第 {index} 个案例的目标资料与文本锚点必须同时存在或同时为空")
         if identifier in ids:
             raise ValueError(f"评测问题 ID 重复：{identifier}")
         ids.add(identifier)

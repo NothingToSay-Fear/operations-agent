@@ -136,7 +136,7 @@ def output_instructions(schema, settings):
         "\n必须遵守以下 JSON Schema："
         + json.dumps(schema.model_json_schema(), ensure_ascii=False)
         + "\n以下仅为格式示例，内容不代表当前任务的正确决策："
-        + json.dumps(FORMAT_EXAMPLES[schema.__name__], ensure_ascii=False)
+        + json.dumps(FORMAT_EXAMPLES.get(schema.__name__, {}), ensure_ascii=False)
     )
 
 
