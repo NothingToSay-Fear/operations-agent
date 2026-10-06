@@ -19,6 +19,7 @@ effective_constraints 是当前唯一生效的结构化任务约束；若摘要�
 长期记忆仅采用上下文中已确认的内容。propose_memory 只能生成待确认候选，不能声称已记住。
 历史检索仅限当前任务，禁止跨任务查找讨论。已确认的长期偏好可跨任务使用，但不能代替当前库存等事实。
 数值、属性、规则必须来自本任务工具证据或用户明确提供的事实。证据ID使用真实返回的 ev_...。
+当 Observation 包含 absence_notice 时，表示本次查询在当前数据源和条件下未命中。你可以据此如实说明“未查到”，停止重复检索，或请求用户补充资料；它不是可引用的业务事实，不能写入 evidence_ids，也不能据此猜测数值、属性或规则。
 用户明确限定“只依据知识库/资料”时，只能使用 search_knowledge 与 read_document 的结果；不得用经营工具、模型常识或历史回答补足缺失字段。
 调查需区分事实、算术贡献、相关性与因果假设。预算不足或数据不足时诚实说明，不伪报成功。
 时间以数据能力工具提供的截止日期为准，不擅自用现实日期查模拟数据。先检查不确定的数据能力。
@@ -32,6 +33,9 @@ PROMPTS = {
 若是重规划，change_reason 说明触发事实。任务中出现新条件时，重查失效证据，不能沿用过期结论。
 每个步骤会消耗执行决策和评估调用，请按子目标合并相关调查，避免把每次工具调用拆成一个步骤。
 通常用1至4个子目标覆盖问题；确认口径属于调查准备，撰写结论属于交付，不必分别新增步骤。
+当用户仅要求比较渠道表现、筛选后续调查对象，且未要求保存报告、导出明细、归因分析或特定漏斗指标时，计划只保留三项完成标准：可比时间口径、渠道 GMV 两期对比、调查优先级与后续核验项。不得擅自增加保存成果、全量指标扫描、退款原因下钻或 CTR/CPC 计算等非必要标准。
+对 GMV 贡献、退款诊断、库存覆盖和退款原因驱动的商品描述问题，优先使用 compare_metrics、query_inventory、query_order_facts 已返回的聚合结果。除非用户明确要求完整明细或样本，不得为重复读取分页证据、逐项 calculate 或补充不影响结论的指标新增成功标准。
+对标题、卖点或详情页文案任务，只有用户明确要求品牌规范时才检索品牌资料；资料未命中且用户允许待补充项时，应基于已取得的商品事实交付草稿并标注缺口，不得把不存在的品牌资料设为完成前提。
 计划本身不会完成任务，后续执行器将真正调用工具。""",
     "execute": """执行当前子目标。每次决定一个动作：tool 调用一个工具；tools 批量调用多个相互独立的只读工具；delegate 将边界清晰、相互独立的专项调查委派给临时子 Agent；step_done 表示子目标已满足；
 若 promotion_fast_path.status 为 snapshot_ready，说明服务端已完成活动参与 SKU、成本、毛利、库存、在途和需求的全量计算。若用户要求保存方案，下一步只能调用 save_artifact，并在 evidence_ids 中原样引用 promotion_fast_path.evidence_id；不得读取明细、重规划或调用其他工具。
@@ -44,7 +48,8 @@ save_artifact 与 propose_memory 会写入数据，只能使用单个 tool 动�
 当用户要求未来补货或缺货风险时，query_inventory 的 risk_summary 已按全量仓位计算未来窗口缺口、建议补货量、交期和 MOQ。优先基于该摘要交付；除非用户明确要求完整 SKU 清单或摘要字段缺失，不得为逐页读取库存原表而反复调用 read_evidence。
 save_artifact 可保存真实报告/文案/CSV；报告应包含证据、口径和缺口，不只说已完成。
 引用格式 [证据](evidence:ev_...)，成果可用 [成果](artifact:ar_...)。
-step_done 的 evidence_ids 只能使用实际成功工具返回的证据。别将工具报错当作完成。""",
+step_done 的 evidence_ids 只能使用实际成功工具返回的证据。别将工具报错当作完成。
+若相关查询已返回 absence_notice，且没有其他可用查询能补足信息，不要继续重复查询或引用空结果；应选择 ask_user，或在评估阶段选择 stop 并如实说明当前范围内未查到的内容。""",
     "subtask": """你是主 Agent 委派的临时专项执行器，只完成 subtask 中给定的局部调查。
 你只能使用 allowed_tools 中列出的只读工具，不能委派、重规划总体任务、保存成果、修改记忆、追问用户，也不能将历史背景当作新的业务事实。
 每次返回一个局部动作：tool、tools、finish 或 stop。tools 最多4个且必须独立。finish/stop 时写出结构化 findings、limitations 和真实 evidence_ids。
@@ -54,6 +59,9 @@ shared_scope 只用于确定可查数据窗口和指标口径，不得将其转�
     "evaluate": """根据当前计划、已完成步骤和工具观察检查总目标。
 若 promotion_fast_path.status 为 artifact_saved，必须基于促销决策摘要证据和已保存成果完成交付；不得继续查询或重规划。答案应明确建议商品、折扣、毛利约束、库存假设、执行前验证项和成果链接。
 若 inventory_risk_fast_path 存在，说明 query_inventory 已基于全量仓位生成两周缺货风险摘要。当前用户未要求完整导出清单时，必须直接返回 finish：用该摘要中的最高优先级 SKU 给出补货建议，并如实说明 risk_positions 与 shown_positions；不得 continue、replan、ask_user 或发起补充查询。
+若 channel_investigation_fast_path 存在，说明已取得两期渠道 GMV 对比和渠道营销辅助证据。必须直接返回 finish，指出值得进一步调查的渠道、筛选依据与后续核验项；不得继续查询、计算 CTR/CPC 或重规划。
+若 diagnostic_fast_path 存在，说明服务端聚合证据已覆盖当前诊断目标。必须直接返回 finish，只基于列出的证据完成结论、建议或局限说明；不得继续读取分页证据、逐项计算或重规划。
+若 product_copy_fast_path 存在，必须直接返回 finish：仅使用商品事实生成文案，资料缺失时明确标为待补充而不作猜测。若 requires_artifact 为 true 且 artifact_id 存在，须在评估中引用该成果；不得再检索品牌资料或重规划。
 continue 继续已有待执行步骤；replan 修改计划；ask_user 请求关键补充；
 finish 仅用于所有成功标准满足且成果真实存在；stop 用于无法继续并交付部分成果。
 finish 必须逐项给出 assessments，关联真实证据/成果 ID，并给出完整最终 answer。
@@ -71,9 +79,10 @@ class ModelUnavailable(Exception):
 class StructuredOutputError(ValueError):
     """携带安全的修复提示及已消耗用量，不保存供应商原始响应。"""
 
-    def __init__(self, message, usage):
+    def __init__(self, message, usage, candidate=None):
         super().__init__(message)
         self.usage = usage
+        self.candidate = candidate
 
 
 def uses_json_output(settings):
@@ -172,6 +181,18 @@ def _repair_extra_fields(raw, error, schema, settings):
         return None
 
 
+def _json_object(raw):
+    """仅从当前模型响应提取 JSON 对象，供内存中的格式修复使用。"""
+    content = getattr(raw, "content", None)
+    if not isinstance(content, str):
+        return None
+    try:
+        value = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def parse_structured_result(result, schema, settings):
     raw = result.get("raw")
     usage = getattr(raw, "usage_metadata", None) or {}
@@ -213,10 +234,14 @@ def parse_structured_result(result, schema, settings):
             }:
                 details[-1] += "（" + validator_hint + "）"
         raise StructuredOutputError(
-            f"模型输出不符合 {schema.__name__}：{'；'.join(details)}。请按本阶段 Schema 修正。", usage
+            f"模型输出不符合 {schema.__name__}：{'；'.join(details)}。请按本阶段 Schema 修正。",
+            usage,
+            _json_object(raw),
         )
     raise StructuredOutputError(
-        f"模型输出不符合 {schema.__name__}：未取得可解析的结构化对象，请按本阶段 Schema 返回完整结果。", usage
+        f"模型输出不符合 {schema.__name__}：未取得可解析的结构化对象，请按本阶段 Schema 返回完整结果。",
+        usage,
+        _json_object(raw),
     )
 
 
@@ -244,6 +269,17 @@ async def invoke_structured(model, schema, settings, prompt, payload):
             f"模型输出被截断，请精简内容并返回完整的 {schema.__name__} 对象。", usage
         ) from None
     return parse_structured_result(result, schema, settings)
+
+
+async def repair_structured(model, schema, settings, candidate, error):
+    """使用最小上下文修复可解析 JSON 的协议字段，不重新进行业务决策。"""
+    prompt = (
+        "你是结构化输出修复器。只修复 JSON 与 Schema 的一致性，不重新分析业务。"
+        "已存在的 kind、tool、arguments、tool_calls、subtasks、evidence_ids 必须逐字保留。"
+        "只返回一个合法 JSON 对象，不输出 Markdown 或解释。"
+    )
+    payload = {"candidate": candidate, "validation_error": str(error)[:1200]}
+    return await invoke_structured(model, schema, settings, prompt, payload)
 
 
 def model_failure(exc):
@@ -327,3 +363,9 @@ class ModelGateway:
             # 评估只判断目标与证据，不需要业务工具的参数目录。
             payload.pop("tools", None)
         return await invoke_structured(self._model, schema, self.settings, COMMON + PROMPTS[phase], payload)
+
+    async def repair(self, phase: str, candidate: dict, error: StructuredOutputError):
+        if self._model is None:
+            self._model = self.build()
+        schema = {"plan": Plan, "execute": Action, "subtask": SubtaskDecision, "evaluate": Decision}[phase]
+        return await repair_structured(self._model, schema, self.settings, candidate, error)

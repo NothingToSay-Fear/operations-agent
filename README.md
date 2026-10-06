@@ -56,7 +56,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-`app.bootstrap` 只在数据集不存在时生成数据，不覆盖已有数据。首次生成包含对账验证，结果打印为 JSON。数据库位于 `backend/data/`，已加入忽略规则。请使用项目独立虚拟环境，避免系统已有的 Transformers/Hugging Face 版本冲突。本地默认在 API 进程启动维护 Worker；Docker 使用独立 Worker。
+`app.bootstrap` 只在数据集不存在时生成数据，不覆盖已有数据。首次生成包含对账验证，结果打印为 JSON。请使用项目独立虚拟环境，避免系统已有的 Transformers/Hugging Face 版本冲突。本地默认在 API 进程启动维护 Worker；Docker 使用独立 Worker。
 
 另开终端启动前端：
 
@@ -98,18 +98,11 @@ docker compose stop
 
 ## 模拟数据与情境
 
-需要一个独立的小数据集时，在 `backend/` 执行：
-
-```powershell
-python -m app.seed --days 60 --skus 32 --orders 2500 --scenario stockout --url sqlite+aiosqlite:///data/stockout.db --report data/stockout-report.json
-```
-
 情境：`baseline`、`traffic_drop`、`stockout`、`refund_wave`、`promotion_margin`、`supply_delay`、`mixed`。情境标签只供生成器/评测器使用，不写入 Agent 可读取的资料和能力目录。
 
 切换本地只读数据源时，在 `.env` 使用绝对路径，例如：
 
 ```dotenv
-COMMERCE_DATABASE_URL=sqlite+aiosqlite:///file:D:/project/operations-agent/backend/data/stockout.db?mode=ro&uri=true
 ```
 
 数值由订单、明细、付款和流水推导。访客按周期去重；支付商品 GMV 不含运费；退款以到账日统计；库存区分实物、预占、可用与在途。完整字段和边界见 [数据字典](docs/DATA.md)。

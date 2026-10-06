@@ -14,7 +14,7 @@ from app.agent.contracts import (
     SubtaskSpec,
     ToolCall,
 )
-from app.agent.runtime import AgentRuntime, LeaseLost, initial_state
+from app.agent.runtime import AgentRuntime, LeaseLost, compact_observations, initial_state
 from app.agent.tools import calculate
 from app.models import Artifact, Evidence, Task, TaskEvent
 
@@ -256,6 +256,70 @@ def test_inventory_risk_observation_keeps_summary_before_raw_rows():
     assert observed["total_positions"] == 200
 
 
+def test_compact_observations_only_exposes_current_success_evidence_ids():
+    rows = [
+        {
+            "evidence_id": "ev_success",
+            "status": "success",
+            "constraint_version": 2,
+            "tool": "query_metrics",
+            "data": {"rows": [{"metric": "paid_gmv", "value": 100}]},
+        },
+        {
+            "evidence_id": "ev_empty",
+            "status": "empty",
+            "constraint_version": 2,
+            "tool": "query_inventory",
+            "data": {"rows": []},
+        },
+        {
+            "evidence_id": "ev_failed",
+            "status": "failed",
+            "constraint_version": 2,
+            "tool": "query_metrics",
+            "data": {"message": "参数无效"},
+        },
+        {
+            "evidence_id": "ev_stale",
+            "status": "success",
+            "constraint_version": 1,
+            "tool": "query_metrics",
+            "data": {"rows": [{"metric": "paid_gmv", "value": 90}]},
+        },
+    ]
+
+    observations = compact_observations(
+        rows, maximum_rows=10, maximum_chars=7000, constraint_version=2
+    )
+
+    assert [item.get("evidence_id") for item in observations] == ["ev_success", None, None, None]
+    assert [item["status"] for item in observations] == ["success", "empty", "failed", "success"]
+    assert "未返回匹配结果" in observations[1]["absence_notice"]
+    assert "absence_notice" not in observations[0]
+
+
+def test_repaired_action_must_keep_original_tool_parameters():
+    candidate = {
+        "kind": "tool",
+        "tool": "query_metrics",
+        "arguments": {"dimensions": ["channel"], "start_date": "2026-09-22"},
+        "evidence_ids": ["ev_metric"],
+    }
+    repaired = Action(
+        kind="tool",
+        tool="query_metrics",
+        arguments=candidate["arguments"],
+        evidence_ids=candidate["evidence_ids"],
+        summary="按渠道查询目标期指标",
+    )
+
+    AgentRuntime._check_repaired_decision("execute", candidate, repaired)
+
+    changed = repaired.model_copy(update={"arguments": {"dimensions": ["product"]}})
+    with pytest.raises(ValueError, match="原决策字段"):
+        AgentRuntime._check_repaired_decision("execute", candidate, changed)
+
+
 def test_inventory_risk_fast_path_skips_extra_exploration():
     runtime = AgentRuntime(None, None)
 
@@ -278,6 +342,98 @@ def test_inventory_risk_fast_path_skips_extra_exploration():
     assert runtime._activate_inventory_fast_path(InventoryTask(), state, [observation])
     assert state["phase"] == "evaluate"
     assert state["inventory_risk_fast_path"]["evidence_id"] == "ev_inventory"
+
+
+def test_channel_investigation_fast_path_skips_nonessential_calculations():
+    runtime = AgentRuntime(None, None)
+
+    class ChannelTask:
+        goal = "比较最近两周的渠道表现，哪些渠道值得进一步调查？"
+
+    state = {
+        "phase": "execute",
+        "constraint_version": 1,
+        "plan": {
+            "criteria": [
+                {"id": "legacy", "description": "不应强制保存未被要求的报告"},
+            ]
+        },
+        "plans": [{"version": 1}],
+        "observations": [
+            {
+                "evidence_id": "ev_gmv",
+                "tool": "compare_metrics",
+                "status": "success",
+                "constraint_version": 1,
+                "arguments": {"group_by": "channel", "metric": "paid_gmv"},
+            },
+            {
+                "evidence_id": "ev_marketing",
+                "tool": "query_marketing",
+                "status": "success",
+                "constraint_version": 1,
+                "arguments": {"group_by": "channel"},
+            },
+        ],
+    }
+
+    assert runtime._activate_channel_investigation_fast_path(ChannelTask(), state)
+    assert state["phase"] == "evaluate"
+    assert state["channel_investigation_fast_path"] == {
+        "comparison_evidence_id": "ev_gmv",
+        "marketing_evidence_id": "ev_marketing",
+        "criteria_ids": ["c1", "c2", "c3"],
+    }
+    assert [criterion["id"] for criterion in state["plan"]["criteria"]] == ["c1", "c2", "c3"]
+    assert state["plans"][-1]["scope_narrowed"]["reason"].startswith("用户仅要求渠道比较")
+
+
+def test_diagnostic_fast_path_uses_channel_and_product_gmv_aggregates():
+    runtime = AgentRuntime(None, None)
+
+    class DiagnosticTask:
+        goal = "分析最近七天GMV相对前七天的变化，找出主要贡献项和三条运营建议。"
+
+    state = {
+        "phase": "execute",
+        "constraint_version": 1,
+        "plan": {"criteria": [{"id": "legacy", "description": "过宽条件"}]},
+        "plans": [{"version": 1}],
+        "observations": [
+            {"evidence_id": "ev_scope", "tool": "inspect_data_capabilities", "status": "success", "constraint_version": 1, "arguments": {}},
+            {"evidence_id": "ev_channel", "tool": "compare_metrics", "status": "success", "constraint_version": 1, "arguments": {"metric": "paid_gmv", "group_by": "channel"}},
+            {"evidence_id": "ev_product", "tool": "compare_metrics", "status": "success", "constraint_version": 1, "arguments": {"metric": "paid_gmv", "group_by": "product"}},
+        ],
+    }
+
+    assert runtime._activate_diagnostic_fast_path(DiagnosticTask(), state)
+    assert state["phase"] == "evaluate"
+    assert state["diagnostic_fast_path"]["kind"] == "gmv_contribution"
+    assert state["diagnostic_fast_path"]["evidence_ids"] == ["ev_scope", "ev_channel", "ev_product"]
+
+
+def test_product_copy_fast_path_allows_missing_brand_materials():
+    runtime = AgentRuntime(None, None)
+
+    class ProductTask:
+        goal = "为SKU-0008生成三个标题版本，说明每个版本依据哪些商品事实。"
+
+    state = {
+        "phase": "execute",
+        "constraint_version": 1,
+        "plan": {"criteria": [{"id": "legacy", "description": "错误要求品牌规范"}]},
+        "plans": [{"version": 1}],
+        "artifacts": [],
+        "observations": [
+            {"evidence_id": "ev_product", "tool": "get_products", "status": "success", "constraint_version": 1, "arguments": {"product_ids": ["SKU-0008"]}},
+            {"evidence_id": "ev_empty", "tool": "search_knowledge", "status": "empty", "constraint_version": 1, "arguments": {"query": "品牌规范"}},
+        ],
+    }
+
+    assert runtime._activate_product_copy_fast_path(ProductTask(), state)
+    assert state["phase"] == "evaluate"
+    assert state["product_copy_fast_path"]["product_evidence_id"] == "ev_product"
+    assert [item["id"] for item in state["plan"]["criteria"]] == ["c1", "c2"]
 
 
 async def test_step_budget_routes_to_replan_and_preserves_global_budget(database, settings):

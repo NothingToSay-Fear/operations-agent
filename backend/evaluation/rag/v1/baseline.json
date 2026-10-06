@@ -10,7 +10,7 @@
     "ts_rank_cd_mrr": 0.9891304347826086,
     "ts_rank_cd_no_answer_false_positive_rate": 1.0,
     "no_answer_false_positive_rate": 0.0,
-    "p95_elapsed_ms": 1088.0,
+    "p95_elapsed_ms": 1603.0,
     "history_isolation": 1.0
   }
 }

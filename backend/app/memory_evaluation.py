@@ -58,9 +58,16 @@ async def run(output: Path, dataset_path: Path = DEFAULT_DATASET) -> dict:
     if not settings.embedding_model_path or not settings.reranker_model_path:
         raise RuntimeError("记忆评测要求配置真实向量与精排模型目录")
     output.mkdir(parents=True, exist_ok=False)
-    app_url, _, _ = evaluation_urls("MEMORY_EVALUATION", settings)
+    app_url, _, commerce_reader_url = evaluation_urls("MEMORY_EVALUATION", settings)
     await reset_application_database(app_url, retrieval_indexes=True)
-    settings = settings.model_copy(update={"app_database_url": app_url, "memory_recent_turn_limit": 4})
+    # Database 初始化会创建只读业务连接；记忆评测虽不读取经营表，也必须传入隔离连接地址。
+    settings = settings.model_copy(
+        update={
+            "app_database_url": app_url,
+            "commerce_database_url": commerce_reader_url,
+            "memory_recent_turn_limit": 4,
+        }
+    )
     db = Database(settings)
     try:
         health = await retrieval.health(settings)

@@ -20,6 +20,9 @@ services:
     build: ./backend
     command: [python, -m, pytest, -q]
     environment: &test_environment
+      APP_DATABASE_URL: postgresql+asyncpg://test_operations_app:test-app-password@db-test:5432/operations_test
+      COMMERCE_ADMIN_URL: postgresql+asyncpg://test_commerce_owner:test-commerce-owner-password@db-test:5432/commerce_test
+      COMMERCE_DATABASE_URL: postgresql+asyncpg://test_commerce_reader:test-commerce-reader-password@db-test:5432/commerce_test
       TEST_APP_DATABASE_URL: postgresql+asyncpg://test_operations_app:test-app-password@db-test:5432/operations_test
       TEST_COMMERCE_ADMIN_URL: postgresql+asyncpg://test_commerce_owner:test-commerce-owner-password@db-test:5432/commerce_test
       TEST_COMMERCE_DATABASE_URL: postgresql+asyncpg://test_commerce_reader:test-commerce-reader-password@db-test:5432/commerce_test
@@ -40,7 +43,11 @@ services:
   rag-evaluation:
     build: ./backend
     command: [python, -m, app.rag_evaluation]
-    environment: *test_environment
+    environment:
+      <<: *test_environment
+      APP_DATABASE_URL: ""
+      COMMERCE_ADMIN_URL: ""
+      COMMERCE_DATABASE_URL: ""
     volumes:
       - ./models:/models:ro
       - ./backend/evaluation:/app/evaluation
@@ -53,11 +60,15 @@ services:
     command: [python, -m, app.evaluation]
     environment:
       <<: *test_environment
+      APP_DATABASE_URL: ""
+      COMMERCE_ADMIN_URL: ""
+      COMMERCE_DATABASE_URL: ""
       LLM_PROVIDER: ${LLM_PROVIDER:-openai}
       LLM_MODEL: ${LLM_MODEL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_TIMEOUT: ${LLM_TIMEOUT:-90}
+      MAX_ACTIVE_SECONDS: ${MAX_ACTIVE_SECONDS:-500}
     volumes:
       - ./models:/models:ro
       - ./backend/evaluation:/app/evaluation
@@ -70,6 +81,9 @@ services:
     command: [python, -m, app.memory_evaluation]
     environment:
       <<: *test_environment
+      APP_DATABASE_URL: ""
+      COMMERCE_ADMIN_URL: ""
+      COMMERCE_DATABASE_URL: ""
       LLM_PROVIDER: ${LLM_PROVIDER:-openai}
       LLM_MODEL: ${LLM_MODEL:-}
       LLM_API_KEY: ${LLM_API_KEY:-}

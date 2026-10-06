@@ -13,7 +13,7 @@ from langgraph.graph import END, START, StateGraph
 from sqlalchemy import select, update
 
 from app.agent.contracts import Action, Decision, Plan, SubtaskDecision, SubtaskSpec
-from app.agent.model import ModelGateway, ModelUnavailable, PROMPT_VERSION, model_failure
+from app.agent.model import ModelGateway, ModelUnavailable, PROMPT_VERSION, StructuredOutputError, model_failure
 from app.agent.tools import REGISTRY, catalog, invoke, supports_parallel
 from app import access, auxiliary, memory, task_context
 from app.extension_models import MemoryEvent
@@ -167,8 +167,8 @@ def compact(value, maximum=4500):
     }
 
 
-def compact_observations(rows, *, maximum_rows, maximum_chars):
-    """按最近优先保留可审计观测，避免工具原始结果挤占主 Agent 上下文。"""
+def compact_observations(rows, *, maximum_rows, maximum_chars, constraint_version=None):
+    """按最近优先保留观测；仅向模型暴露当前成功证据的 ID。"""
     selected = []
     for row in reversed(rows[-maximum_rows:]):
         data = row.get("data") if isinstance(row, dict) else None
@@ -180,12 +180,42 @@ def compact_observations(rows, *, maximum_rows, maximum_chars):
             else min(2200, max(700, maximum_chars // 2))
         )
         item = compact(row, maximum=item_budget)
+        # 空结果和失败结果仍须告知模型，避免重复查询；但它们不是可引用事实，不能暴露证据 ID。
+        # 上下文边界变化后遗留的旧版本观测同样不能作为新结论的依据。
+        is_current_success = (
+            row.get("status") == "success"
+            and (constraint_version is None or row.get("constraint_version") == constraint_version)
+        )
+        if not is_current_success:
+            item.pop("evidence_id", None)
+        if row.get("status") == "empty":
+            # 空结果可帮助模型停止无效重试并如实说明资料缺口，但不能作为业务事实引用。
+            item["absence_notice"] = (
+                f"工具 {row.get('tool', 'unknown')} 在当前数据源和本次查询条件下未返回匹配结果。"
+                "这是一条负向观察：可据此说明当前范围内未查到资料或记录，"
+                "不得把它写入 evidence_ids，也不得据此推断具体业务属性、数值或规则。"
+            )
         candidate = [item, *selected]
         if len(json.dumps(candidate, ensure_ascii=False, default=str)) > maximum_chars:
             continue
         selected = candidate
     if not selected and rows:
-        selected = [compact(rows[-1], maximum=max(400, maximum_chars - 100))]
+        item = compact(rows[-1], maximum=max(400, maximum_chars - 100))
+        if not (
+            rows[-1].get("status") == "success"
+            and (
+                constraint_version is None
+                or rows[-1].get("constraint_version") == constraint_version
+            )
+        ):
+            item.pop("evidence_id", None)
+        if rows[-1].get("status") == "empty":
+            item["absence_notice"] = (
+                f"工具 {rows[-1].get('tool', 'unknown')} 在当前数据源和本次查询条件下未返回匹配结果。"
+                "这是一条负向观察：可据此说明当前范围内未查到资料或记录，"
+                "不得把它写入 evidence_ids，也不得据此推断具体业务属性、数值或规则。"
+            )
+        selected = [item]
     return selected
 
 
@@ -551,12 +581,16 @@ class AgentRuntime:
                 s["observations"],
                 maximum_rows=self.settings.main_context_observation_limit,
                 maximum_chars=self.settings.main_context_observation_char_budget,
+                constraint_version=s["constraint_version"],
             ),
             "subtask_results": summaries,
             "artifacts": s["artifacts"],
             "remaining_budget": {key: s["budget"][key] - s["turn_usage"].get(key, 0) for key in s["budget"]},
             "feedback": s.get("feedback", ""),
             "inventory_risk_fast_path": s.get("inventory_risk_fast_path"),
+            "channel_investigation_fast_path": s.get("channel_investigation_fast_path"),
+            "diagnostic_fast_path": s.get("diagnostic_fast_path"),
+            "product_copy_fast_path": s.get("product_copy_fast_path"),
             "promotion_fast_path": promotion_fast_path,
             "tools": catalog(
                 names=["save_artifact"] if promotion_save_only else None,
@@ -651,6 +685,226 @@ class AgentRuntime:
             )
             return True
         return False
+
+    @staticmethod
+    def _channel_investigation_fast_path_allowed(task):
+        """仅为已有两期渠道对比且目标是筛选调查对象的任务提前收束。"""
+
+        goal = task.goal.lower()
+        asks_channel = "渠道" in goal and any(token in goal for token in ("调查", "异常", "表现", "比较"))
+        asks_advanced_metrics = any(
+            token in goal for token in ("ctr", "cpc", "roas", "点击", "曝光", "转化率", "转化")
+        )
+        return asks_channel and not asks_advanced_metrics
+
+    def _activate_channel_investigation_fast_path(self, task, state):
+        """渠道 GMV 对比和营销辅助证据齐备后，避免扩展无关指标并反复重规划。"""
+
+        if state.get("channel_investigation_fast_path") or not self._channel_investigation_fast_path_allowed(task):
+            return False
+        observations = [
+            item
+            for item in state["observations"]
+            if item.get("status") == "success"
+            and item.get("constraint_version") == state["constraint_version"]
+        ]
+        comparison = next(
+            (
+                item
+                for item in reversed(observations)
+                if item.get("tool") == "compare_metrics"
+                and item.get("arguments", {}).get("group_by") == "channel"
+                and item.get("arguments", {}).get("metric") == "paid_gmv"
+            ),
+            None,
+        )
+        marketing = next(
+            (
+                item
+                for item in reversed(observations)
+                if item.get("tool") == "query_marketing"
+                and item.get("arguments", {}).get("group_by") == "channel"
+            ),
+            None,
+        )
+        if not comparison or not marketing:
+            return False
+        narrowed_criteria = [
+            {
+                "id": "c1",
+                "description": "确认数据截止日期与两期等长的渠道 GMV 对比口径，并标明模拟数据限制。",
+            },
+            {
+                "id": "c2",
+                "description": "取得全部可用渠道的两期支付商品 GMV 对比证据。",
+            },
+            {
+                "id": "c3",
+                "description": "给出值得进一步调查的渠道、优先级、筛选依据和后续核验项，并区分事实与待验证假设。",
+            },
+        ]
+        # 初始计划可能将未被用户要求的报告保存或归因分析误列为完成条件。
+        # 该受限路径仅收窄到当前问题的最小可验证交付，保留历史计划以供审计。
+        if state.get("plan"):
+            state["plan"]["criteria"] = narrowed_criteria
+            if state.get("plans"):
+                state["plans"][-1]["scope_narrowed"] = {
+                    "reason": "用户仅要求渠道比较和后续调查筛选，不要求报告保存或归因分析。",
+                    "criteria": copy.deepcopy(narrowed_criteria),
+                }
+        state["channel_investigation_fast_path"] = {
+            "comparison_evidence_id": comparison["evidence_id"],
+            "marketing_evidence_id": marketing["evidence_id"],
+            "criteria_ids": [criterion["id"] for criterion in narrowed_criteria],
+        }
+        state["phase"] = "evaluate"
+        state["feedback"] = (
+            "已取得两期渠道 GMV 对比和渠道营销辅助证据。"
+            "当前目标只要求筛选值得进一步调查的渠道；请直接完成评估，"
+            "说明筛选依据、值得调查的渠道和后续核验项，不得继续查询、计算 CTR/CPC 或重规划。"
+        )
+        return True
+
+    @staticmethod
+    def _successful_observation(state, tool, *, metric=None, group_by=None):
+        """从当前约束版本中定位可用于收束任务的聚合证据。"""
+
+        for item in reversed(state["observations"]):
+            if item.get("status") != "success" or item.get("constraint_version") != state["constraint_version"]:
+                continue
+            if item.get("tool") != tool:
+                continue
+            arguments = item.get("arguments", {})
+            if metric is not None and arguments.get("metric") != metric:
+                continue
+            if group_by is not None and arguments.get("group_by") != group_by:
+                continue
+            return item
+        return None
+
+    @staticmethod
+    def _narrow_plan_criteria(state, criteria, reason):
+        """收窄模型自行扩展的完成条件，同时在计划快照中保留审计记录。"""
+
+        if not state.get("plan"):
+            return
+        state["plan"]["criteria"] = criteria
+        if state.get("plans"):
+            state["plans"][-1]["scope_narrowed"] = {
+                "reason": reason,
+                "criteria": copy.deepcopy(criteria),
+            }
+
+    def _activate_diagnostic_fast_path(self, task, state):
+        """将已有的经营聚合结果直接转为诊断交付，阻止大表分页循环。"""
+
+        if state.get("diagnostic_fast_path"):
+            return False
+        goal = task.goal.lower()
+        capability = self._successful_observation(state, "inspect_data_capabilities")
+        kind = ""
+        evidence = []
+        criteria = []
+        if "gmv" in goal and "贡献" in goal:
+            channel = self._successful_observation(state, "compare_metrics", metric="paid_gmv", group_by="channel")
+            product = self._successful_observation(state, "compare_metrics", metric="paid_gmv", group_by="product")
+            if channel and product:
+                kind, evidence = "gmv_contribution", [channel, product]
+                criteria = [
+                    {"id": "c1", "description": "说明可比的两个 GMV 统计周期及数据限制。"},
+                    {"id": "c2", "description": "基于渠道和商品两期 GMV 聚合结果识别主要贡献项。"},
+                    {"id": "c3", "description": "给出三条有证据支撑且可执行的运营建议。"},
+                ]
+        elif "退款" in goal and "跨期" in goal:
+            refund = self._successful_observation(state, "compare_metrics", metric="refund_amount", group_by="product")
+            facts = self._successful_observation(state, "query_order_facts")
+            if refund and facts:
+                kind, evidence = "refund_diagnosis", [refund, facts]
+                criteria = [
+                    {"id": "c1", "description": "说明退款到账口径和跨期退款限制。"},
+                    {"id": "c2", "description": "基于商品退款变化与退款原因聚合判断是否值得调查。"},
+                    {"id": "c3", "description": "区分已证实的退款事实与待验证原因。"},
+                ]
+        elif "库存覆盖" in goal:
+            inventory = self._successful_observation(state, "query_inventory")
+            sales = self._successful_observation(state, "query_metrics", group_by="product")
+            if inventory and sales:
+                kind, evidence = "inventory_coverage", [inventory, sales]
+                criteria = [
+                    {"id": "c1", "description": "说明近十四天销量与库存覆盖天数的计算口径。"},
+                    {"id": "c2", "description": "基于全量库存聚合结果给出覆盖情况。"},
+                    {"id": "c3", "description": "说明历史销量外推、缺货截断和未来活动等局限。"},
+                ]
+        elif "退款原因" in goal and "商品描述" in goal:
+            facts = self._successful_observation(state, "query_order_facts")
+            metrics = self._successful_observation(state, "query_metrics", group_by="product")
+            products = self._successful_observation(state, "get_products")
+            if facts and metrics and products:
+                kind, evidence = "refund_copy", [facts, metrics, products]
+                criteria = [
+                    {"id": "c1", "description": "基于退款原因聚合和商品事实识别优先优化对象。"},
+                    {"id": "c2", "description": "给出不把未证实原因写成事实的描述优化建议。"},
+                    {"id": "c3", "description": "说明需继续验证的原因和数据限制。"},
+                ]
+        if not kind:
+            return False
+        if capability:
+            evidence.insert(0, capability)
+        self._narrow_plan_criteria(state, criteria, "已有聚合证据覆盖用户诊断目标，无需读取分页明细或扩展指标。")
+        state["diagnostic_fast_path"] = {
+            "kind": kind,
+            "evidence_ids": [item["evidence_id"] for item in evidence],
+            "criteria_ids": [item["id"] for item in criteria],
+        }
+        state["phase"] = "evaluate"
+        state["feedback"] = "已取得覆盖当前诊断目标的聚合证据，请直接完成评估，不得读取分页明细、逐项计算或重规划。"
+        return True
+
+    def _activate_product_copy_fast_path(self, task, state):
+        """在商品事实齐备时交付文案；品牌资料缺失只作为待补充项。"""
+
+        existing = state.get("product_copy_fast_path")
+        if isinstance(existing, dict) and existing.get("status") != "facts_ready":
+            return False
+        goal = task.goal.lower()
+        if not any(token in goal for token in ("标题", "卖点", "文案", "详情页")):
+            return False
+        product = self._successful_observation(state, "get_products")
+        if not product:
+            return False
+        requires_artifact = existing.get("requires_artifact") if isinstance(existing, dict) else any(
+            token in goal for token in ("保存", "草稿")
+        )
+        artifact = next(
+            (item for item in reversed(state["artifacts"]) if item.get("constraint_version") == state["constraint_version"]),
+            None,
+        )
+        if requires_artifact and not artifact:
+            state["product_copy_fast_path"] = {
+                "status": "facts_ready",
+                "product_evidence_id": product["evidence_id"],
+                "requires_artifact": True,
+            }
+            state["phase"] = "execute"
+            state["feedback"] = "商品事实已齐备。仅可基于这些事实保存草稿；品牌资料未命中时须标注待补充，不得继续检索或猜测。"
+            return True
+        criteria = [
+            {"id": "c1", "description": "仅使用已取得的商品事实生成标题、卖点或详情页文案。"},
+            {"id": "c2", "description": "将缺失的品牌规范或商品参数明确标为待补充，不作猜测。"},
+        ]
+        if requires_artifact:
+            criteria.append({"id": "c3", "description": "保存可追溯到商品事实的草稿成果。"})
+        self._narrow_plan_criteria(state, criteria, "文案任务允许保留待补充项，品牌资料缺失不是阻断条件。")
+        state["product_copy_fast_path"] = {
+            "status": "artifact_saved" if artifact else "ready",
+            "product_evidence_id": existing.get("product_evidence_id") if isinstance(existing, dict) else product["evidence_id"],
+            "requires_artifact": requires_artifact,
+            "artifact_id": artifact.get("artifact_id") if artifact else None,
+            "criteria_ids": [item["id"] for item in criteria],
+        }
+        state["phase"] = "evaluate"
+        state["feedback"] = "商品事实已齐备，缺失资料须标为待补充。请直接完成文案交付，不得继续检索品牌资料或重规划。"
+        return True
 
     def _advance_promotion_fast_path(self, state, observations):
         """将聚合证据、方案保存和最终评估串成受控的三段式收尾流程。"""
@@ -831,6 +1085,7 @@ class AgentRuntime:
                     built.get("observations", []),
                     maximum_rows=self.settings.main_context_observation_limit,
                     maximum_chars=self.settings.main_context_observation_char_budget,
+                    constraint_version=state["constraint_version"],
                 )
                 context = {
                     **self.context(task),
@@ -864,11 +1119,32 @@ class AgentRuntime:
                 for m in built["long_term_memories"]
             ]
             remaining_seconds = state["budget"]["active_seconds"] - state["turn_usage"]["active_seconds"]
-            decision, usage = await asyncio.wait_for(
-                self.model.decide(phase, context),
-                timeout=min(self.settings.llm_timeout, max(0.01, remaining_seconds)),
-            )
-            self.account(state, usage)
+            try:
+                decision, usage = await asyncio.wait_for(
+                    self.model.decide(phase, context),
+                    timeout=min(self.settings.llm_timeout, max(0.01, remaining_seconds)),
+                )
+                self.account(state, usage)
+            except StructuredOutputError as exc:
+                self.account(state, exc.usage)
+                candidate = exc.candidate
+                if not isinstance(candidate, dict) or not hasattr(self.model, "repair"):
+                    await self.commit(task, state, "format_repair_skipped", {"message": str(exc)[:300]})
+                    task = await self.load(task.id)
+                    state = copy.deepcopy(task.state)
+                    raise
+                await self.commit(task, state, "format_repair_started", {"phase": phase, "message": str(exc)[:300]})
+                repaired_task = await self.reserve(await self.load(task.id), "model_calls")
+                if not repaired_task:
+                    return False
+                task, state = repaired_task, copy.deepcopy(repaired_task.state)
+                remaining_seconds = state["budget"]["active_seconds"] - state["turn_usage"]["active_seconds"]
+                decision, usage = await asyncio.wait_for(
+                    self.model.repair(phase, candidate, exc),
+                    timeout=min(self.settings.llm_timeout, max(0.01, remaining_seconds)),
+                )
+                self._check_repaired_decision(phase, candidate, decision)
+                self.account(state, usage)
             state["invalid_outputs"] = 0
             state["feedback"] = ""
             if phase == "plan":
@@ -881,6 +1157,7 @@ class AgentRuntime:
             state["answer"] = str(exc)
             await self.commit(task, state, "blocked", {"message": str(exc)}, status="blocked")
             return False
+
         except LeaseLost:
             raise
         except (ValueError, TypeError) as exc:
@@ -913,6 +1190,20 @@ class AgentRuntime:
             state["answer"] = failure["message"]
             await self.commit(task, state, "model_error", failure, status="blocked")
             return False
+
+    @staticmethod
+    def _check_repaired_decision(phase, candidate, decision):
+        """格式修复不得改变原决策已经明确的业务动作与证据引用。"""
+        protected = {
+            "plan": {"criteria", "steps", "change_reason"},
+            "execute": {"kind", "tool", "arguments", "tool_calls", "subtasks", "evidence_ids"},
+            "subtask": {"kind", "tool", "arguments", "tool_calls", "findings", "limitations", "evidence_ids"},
+            "evaluate": {"kind", "reason", "answer", "assessments"},
+        }[phase]
+        repaired = decision.model_dump()
+        changed = [key for key in protected if key in candidate and candidate[key] != repaired.get(key)]
+        if changed:
+            raise ValueError("格式修复改变了原决策字段：" + ", ".join(sorted(changed)))
 
     async def apply_plan(self, task, state, plan):
         # 计划只描述目标和完成条件；工具选择留给 Execute 阶段根据观察决定。
@@ -1062,6 +1353,13 @@ class AgentRuntime:
             snapshot_id = promotion_fast_path.get("evidence_id")
             if snapshot_id not in action.arguments.get("evidence_ids", []):
                 raise ValueError("保存促销方案必须引用促销决策摘要证据")
+        product_copy_fast_path = state.get("product_copy_fast_path")
+        if isinstance(product_copy_fast_path, dict) and product_copy_fast_path.get("status") == "facts_ready":
+            if action.kind != "tool" or action.tool != "save_artifact":
+                raise ValueError("用户要求保存草稿时，商品事实齐备后下一步必须保存草稿")
+            product_id = product_copy_fast_path.get("product_evidence_id")
+            if product_id not in action.arguments.get("evidence_ids", []):
+                raise ValueError("保存商品草稿必须引用商品事实证据")
         self.check_evidence(state, action.evidence_ids)
         if action.kind in {"tool", "tools"}:
             calls = (
@@ -1537,8 +1835,12 @@ class AgentRuntime:
                 observations.append(observation)
                 evidences.append(evidence)
             state["pending"] = None
-            if not self._activate_inventory_fast_path(task, state, observations) and not self._advance_promotion_fast_path(
-                state, observations
+            if (
+                not self._activate_inventory_fast_path(task, state, observations)
+                and not self._advance_promotion_fast_path(state, observations)
+                and not self._activate_channel_investigation_fast_path(task, state)
+                and not self._activate_diagnostic_fast_path(task, state)
+                and not self._activate_product_copy_fast_path(task, state)
             ):
                 state["phase"] = "execute"
                 state["feedback"] = (
@@ -1589,8 +1891,12 @@ class AgentRuntime:
                 state, task, call, fingerprint, status, error, result
             )
             state["pending"] = None
-            if not self._activate_inventory_fast_path(task, state, [observation]) and not self._advance_promotion_fast_path(
-                state, [observation]
+            if (
+                not self._activate_inventory_fast_path(task, state, [observation])
+                and not self._advance_promotion_fast_path(state, [observation])
+                and not self._activate_channel_investigation_fast_path(task, state)
+                and not self._activate_diagnostic_fast_path(task, state)
+                and not self._activate_product_copy_fast_path(task, state)
             ):
                 state["phase"] = "execute"
                 state["feedback"] = "" if status == "success" else f"工具返回 {status}，请根据观察修正行动。"

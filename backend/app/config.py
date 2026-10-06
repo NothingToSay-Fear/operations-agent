@@ -8,17 +8,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / "data"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=(ROOT.parent / ".env", ROOT / ".env"), extra="ignore")
 
-    app_database_url: str = f"sqlite+aiosqlite:///{(DATA / 'app.db').as_posix()}"
-    commerce_database_url: str = (
-        f"sqlite+aiosqlite:///file:{(DATA / 'commerce.db').as_posix()}?mode=ro&uri=true"
-    )
-    commerce_admin_url: str = f"sqlite+aiosqlite:///{(DATA / 'commerce.db').as_posix()}"
+    app_database_url: str = ""
+    commerce_database_url: str = ""
+    commerce_admin_url: str = ""
     llm_provider: str = "openai"
     llm_model: str = ""
     llm_api_key: str = ""
@@ -32,10 +29,10 @@ class Settings(BaseSettings):
     cookie_secure: bool = False
     worker_poll_seconds: float = 1
     lease_seconds: int = 120
-    max_model_calls: int = 30
-    max_tool_calls: int = 30
+    max_model_calls: int = 60
+    max_tool_calls: int = 60
     max_replans: int = 5
-    max_active_seconds: int = 300
+    max_active_seconds: int = 500
     max_step_tools: int = 6
     max_subtasks: int = 3
     subtask_max_model_calls: int = 4
