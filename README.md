@@ -145,7 +145,7 @@ docker compose -f docker-compose.test.yml up --build --abort-on-container-exit -
 docker compose -f docker-compose.test.yml down -v
 ```
 
-评测集位于 `backend/evaluation/rag/v1/`：`documents/` 保存原始资料，`cases.json` 为可读、可格式化的问题、目标资料和文本锚点标注，`manifest.json` 定义 Top-K 与质量门槛。评测使用与正式上传一致的版本化文件解析、分段和索引流程；报告包含逐题文档命中、文本锚点命中、文档 Recall@5、文本锚点 Recall@5、MRR、`ts_rank_cd` 文档/文本锚点基线、无答案误命中、阶段耗时及当前任务历史隔离检查。
+评测集位于 `backend/evaluation/rag/v1/`：`documents/` 保存原始资料，`cases.json` 为可读、可格式化的问题、目标资料和文本锚点标注，`manifest.json` 定义 Top-K 与质量门槛。当前 v5 包含 60 份运营资料和 110 条问题；每份资料经正式解析后的正文不少于 1,000 字符，覆盖 Markdown、TXT、CSV、PDF、DOCX，以及长文标题层级、原生表格、三页中文 PDF 和大规模库存明细表。评测使用与正式上传一致的版本化文件解析、分段和索引流程；报告包含逐题文档命中、文本锚点命中、文档 Recall@5、文本锚点 Recall@5、MRR、`ts_rank_cd` 文档/文本锚点基线、无答案误命中、阶段耗时及当前任务历史隔离检查。
 
 人工核对一份通过的报告后，可将它写为回归基线；后续评测会对比 `baseline.json` 中受门槛约束的指标：
 

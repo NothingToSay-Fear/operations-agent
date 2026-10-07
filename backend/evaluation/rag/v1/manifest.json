@@ -1,21 +1,317 @@
 {
-  "version": "v2",
+  "version": "v5",
   "top_k": 5,
   "documents": [
-    {"id": "after_sales", "title": "青松系列售后政策", "path": "documents/售后政策.md"},
-    {"id": "replenishment", "title": "青松系列补货规则", "path": "documents/补货规则.csv"},
-    {"id": "product_copy", "title": "商品文案规范", "path": "documents/商品文案规范.md"},
-    {"id": "promotion", "title": "青松系列促销约束", "path": "documents/促销约束.md"},
-    {"id": "warehouse", "title": "仓库管理", "path": "documents/仓储管理.md"},
-    {"id": "logistics", "title": "青松系列配送", "path": "documents/配送时效.md"},
-    {"id": "finance", "title": "结算规范", "path": "documents/结算规范.md"},
-    {"id": "advertising", "title": "广告归因", "path": "documents/广告归因.md"},
-    {"id": "supplier", "title": "供应商交付", "path": "documents/供应商交期.md"},
-    {"id": "packaging", "title": "包装规范", "path": "documents/包装规范.md"}
+    {
+      "id": "after_sales",
+      "title": "青松系列售后政策",
+      "path": "documents/售后政策.md"
+    },
+    {
+      "id": "replenishment",
+      "title": "青松系列补货规则",
+      "path": "documents/补货规则.csv"
+    },
+    {
+      "id": "product_copy",
+      "title": "商品文案规范",
+      "path": "documents/商品文案规范.md"
+    },
+    {
+      "id": "promotion",
+      "title": "青松系列促销约束",
+      "path": "documents/促销约束.md"
+    },
+    {
+      "id": "warehouse",
+      "title": "仓储管理",
+      "path": "documents/仓储管理.md"
+    },
+    {
+      "id": "logistics",
+      "title": "青松系列配送时效",
+      "path": "documents/配送时效.md"
+    },
+    {
+      "id": "finance",
+      "title": "经营结算规范",
+      "path": "documents/结算规范.md"
+    },
+    {
+      "id": "advertising",
+      "title": "广告归因使用边界",
+      "path": "documents/广告归因.md"
+    },
+    {
+      "id": "supplier",
+      "title": "供应商交期与采购确认",
+      "path": "documents/供应商交期.md"
+    },
+    {
+      "id": "packaging",
+      "title": "包装与破损处理规范",
+      "path": "documents/包装规范.md"
+    },
+    {
+      "id": "product_master",
+      "title": "商品主数据说明",
+      "path": "documents/商品主数据说明.txt"
+    },
+    {
+      "id": "inventory_detail",
+      "title": "库存预警明细",
+      "path": "documents/库存预警明细.csv"
+    },
+    {
+      "id": "campaign_selection",
+      "title": "秋季活动选品与预算规则",
+      "path": "documents/活动选品规则.md"
+    },
+    {
+      "id": "campaign_playbook",
+      "title": "双十一预热活动执行手册",
+      "path": "documents/双十一预热活动执行手册.docx"
+    },
+    {
+      "id": "channel_review",
+      "title": "秋季渠道活动复盘",
+      "path": "documents/秋季渠道活动复盘.pdf"
+    },
+    {
+      "id": "extended_01",
+      "title": "会员权益分层规则",
+      "path": "documents/会员权益分层规则.md"
+    },
+    {
+      "id": "extended_02",
+      "title": "客服工单分级规范",
+      "path": "documents/客服工单分级规范.md"
+    },
+    {
+      "id": "extended_03",
+      "title": "退货质检处理规则",
+      "path": "documents/退货质检处理规则.md"
+    },
+    {
+      "id": "extended_04",
+      "title": "价格审批与生效流程",
+      "path": "documents/价格审批与生效流程.md"
+    },
+    {
+      "id": "extended_05",
+      "title": "站内搜索词治理规范",
+      "path": "documents/站内搜索词治理规范.md"
+    },
+    {
+      "id": "extended_06",
+      "title": "直播排期与库存协同",
+      "path": "documents/直播排期与库存协同.md"
+    },
+    {
+      "id": "extended_07",
+      "title": "内容渠道素材审核",
+      "path": "documents/内容渠道素材审核.md"
+    },
+    {
+      "id": "extended_08",
+      "title": "达人合作结算规则",
+      "path": "documents/达人合作结算规则.md"
+    },
+    {
+      "id": "extended_09",
+      "title": "客诉风险预警方案",
+      "path": "documents/客诉风险预警方案.md"
+    },
+    {
+      "id": "extended_10",
+      "title": "组合装商品管理规则",
+      "path": "documents/组合装商品管理规则.md"
+    },
+    {
+      "id": "extended_11",
+      "title": "赠品配置管理规范",
+      "path": "documents/赠品配置管理规范.md"
+    },
+    {
+      "id": "extended_12",
+      "title": "优惠券生命周期规则",
+      "path": "documents/优惠券生命周期规则.md"
+    },
+    {
+      "id": "extended_13",
+      "title": "满减活动配置规范",
+      "path": "documents/满减活动配置规范.md"
+    },
+    {
+      "id": "extended_14",
+      "title": "新品冷启动运营手册",
+      "path": "documents/新品冷启动运营手册.md"
+    },
+    {
+      "id": "extended_15",
+      "title": "爆品监控与限量策略",
+      "path": "documents/爆品监控与限量策略.md"
+    },
+    {
+      "id": "extended_16",
+      "title": "长尾商品治理方案",
+      "path": "documents/长尾商品治理方案.md"
+    },
+    {
+      "id": "extended_17",
+      "title": "竞品价格监控规范",
+      "path": "documents/竞品价格监控规范.md"
+    },
+    {
+      "id": "extended_18",
+      "title": "数据异常排查手册",
+      "path": "documents/数据异常排查手册.md"
+    },
+    {
+      "id": "extended_19",
+      "title": "经营看板口径维护",
+      "path": "documents/经营看板口径维护.md"
+    },
+    {
+      "id": "extended_20",
+      "title": "业务连续性应急预案",
+      "path": "documents/业务连续性应急预案.md"
+    },
+    {
+      "id": "extended_21",
+      "title": "用户分群运营说明",
+      "path": "documents/用户分群运营说明.txt"
+    },
+    {
+      "id": "extended_22",
+      "title": "复购运营触达规范",
+      "path": "documents/复购运营触达规范.txt"
+    },
+    {
+      "id": "extended_23",
+      "title": "会员短信发送规范",
+      "path": "documents/会员短信发送规范.txt"
+    },
+    {
+      "id": "extended_24",
+      "title": "库存库龄管理规则",
+      "path": "documents/库存库龄管理规则.txt"
+    },
+    {
+      "id": "extended_25",
+      "title": "断货响应操作说明",
+      "path": "documents/断货响应操作说明.txt"
+    },
+    {
+      "id": "extended_26",
+      "title": "仓库产能规划说明",
+      "path": "documents/仓库产能规划说明.txt"
+    },
+    {
+      "id": "extended_27",
+      "title": "采购订单对账说明",
+      "path": "documents/采购订单对账说明.txt"
+    },
+    {
+      "id": "extended_28",
+      "title": "发票与结算资料规范",
+      "path": "documents/发票与结算资料规范.txt"
+    },
+    {
+      "id": "extended_29",
+      "title": "用户授权与隐私处理",
+      "path": "documents/用户授权与隐私处理.txt"
+    },
+    {
+      "id": "extended_30",
+      "title": "渠道预算月度明细",
+      "path": "documents/渠道预算月度明细.csv"
+    },
+    {
+      "id": "extended_31",
+      "title": "素材AB实验记录",
+      "path": "documents/素材AB实验记录.csv"
+    },
+    {
+      "id": "extended_32",
+      "title": "商品标签维护明细",
+      "path": "documents/商品标签维护明细.csv"
+    },
+    {
+      "id": "extended_33",
+      "title": "销售预测版本明细",
+      "path": "documents/销售预测版本明细.csv"
+    },
+    {
+      "id": "extended_34",
+      "title": "活动成本归集明细",
+      "path": "documents/活动成本归集明细.csv"
+    },
+    {
+      "id": "extended_35",
+      "title": "供应商绩效评分表",
+      "path": "documents/供应商绩效评分表.csv"
+    },
+    {
+      "id": "extended_36",
+      "title": "入库质检抽检记录",
+      "path": "documents/入库质检抽检记录.csv"
+    },
+    {
+      "id": "extended_37",
+      "title": "配送异常工单明细",
+      "path": "documents/配送异常工单明细.csv"
+    },
+    {
+      "id": "extended_38",
+      "title": "年度促销复盘手册",
+      "path": "documents/年度促销复盘手册.docx"
+    },
+    {
+      "id": "extended_39",
+      "title": "供应风险处置手册",
+      "path": "documents/供应风险处置手册.docx"
+    },
+    {
+      "id": "extended_40",
+      "title": "跨仓调拨执行手册",
+      "path": "documents/跨仓调拨执行手册.docx"
+    },
+    {
+      "id": "extended_41",
+      "title": "大促客服保障手册",
+      "path": "documents/大促客服保障手册.docx"
+    },
+    {
+      "id": "extended_42",
+      "title": "渠道归因月度复盘",
+      "path": "documents/渠道归因月度复盘.pdf"
+    },
+    {
+      "id": "extended_43",
+      "title": "支付与退款数据核验",
+      "path": "documents/支付与退款数据核验.pdf"
+    },
+    {
+      "id": "extended_44",
+      "title": "库存风险控制报告",
+      "path": "documents/库存风险控制报告.pdf"
+    },
+    {
+      "id": "extended_45",
+      "title": "活动页面巡检报告",
+      "path": "documents/活动页面巡检报告.pdf"
+    }
   ],
   "quality_gates": {
-    "document_recall_at_5": {"minimum": 0.9},
-    "anchor_recall_at_5": {"minimum": 0.9},
-    "no_answer_false_positive_rate": {"maximum": 0.0}
+    "document_recall_at_5": {
+      "minimum": 0.9
+    },
+    "anchor_recall_at_5": {
+      "minimum": 0.9
+    },
+    "no_answer_false_positive_rate": {
+      "maximum": 0.0
+    }
   }
 }

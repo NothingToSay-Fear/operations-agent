@@ -67,7 +67,7 @@
         "replenishment"
       ],
       "expected_anchors": [
-        "按未来日均销量估算"
+        "以未来日均销量估算需求"
       ]
     },
     {
@@ -167,7 +167,7 @@
         "promotion"
       ],
       "expected_anchors": [
-        "毛利率不得低于百分之二十五"
+        "活动后毛利率不得低于百分之二十"
       ]
     },
     {
@@ -207,7 +207,7 @@
         "promotion"
       ],
       "expected_anchors": [
-        "毛利率不得低于百分之二十五"
+        "活动后毛利率不得低于百分之二十"
       ]
     },
     {
@@ -287,7 +287,7 @@
         "logistics"
       ],
       "expected_anchors": [
-        "付款后四十八小时内发货"
+        "常规订单支付后四十八小时内发货"
       ]
     },
     {
@@ -337,7 +337,7 @@
         "finance"
       ],
       "expected_anchors": [
-        "不能直接累加每天的访客数"
+        "周期访客应按访客标识去重"
       ]
     },
     {
@@ -483,6 +483,606 @@
       "question": "Python asyncio 中如何实现事件循环？",
       "expected_document_ids": [],
       "expected_anchors": []
+    },
+    {
+      "id": "product-master-travel-cup-moq",
+      "question": "旅行保温杯 SKU-RAG-007 的最小订货量是多少？",
+      "expected_document_ids": [
+        "product_master"
+      ],
+      "expected_anchors": [
+        "SKU-RAG-007：旅行保温杯，容量 500ml，日常售价 129 元，单位成本 52 元，最小订货量 100 件。"
+      ]
+    },
+    {
+      "id": "product-master-unconfirmed-cost",
+      "question": "商品成本没有确认时，活动方案应该怎么处理？",
+      "expected_document_ids": [
+        "product_master"
+      ],
+      "expected_anchors": [
+        "若成本尚未确认，活动方案只能给出待核验提示。"
+      ]
+    },
+    {
+      "id": "product-master-unverified-claim",
+      "question": "没有检测报告时能把不锈钢内胆宣传成抗菌吗？",
+      "expected_document_ids": [
+        "product_master"
+      ],
+      "expected_anchors": [
+        "不能从“不锈钢内胆”推断为“抗菌”或“医疗级”"
+      ]
+    },
+    {
+      "id": "inventory-detail-high-risk",
+      "question": "库存预警明细中，高风险商品建议采取什么动作？",
+      "expected_document_ids": [
+        "inventory_detail"
+      ],
+      "expected_anchors": [
+        "优先补货并核对到货"
+      ]
+    },
+    {
+      "id": "inventory-detail-columns",
+      "question": "库存预警明细里是否包含预计到货日和未来十四天需求？",
+      "expected_document_ids": [
+        "inventory_detail"
+      ],
+      "expected_anchors": [
+        "预计到货日 | 未来十四天需求"
+      ]
+    },
+    {
+      "id": "inventory-detail-sku-007",
+      "question": "SKU-RAG-007 在库存预警明细里对应的商品名称是什么？",
+      "expected_document_ids": [
+        "inventory_detail"
+      ],
+      "expected_anchors": [
+        "SKU-RAG-007 | 玻璃储物罐 007"
+      ]
+    },
+    {
+      "id": "selection-disqualified",
+      "question": "哪些商品不能直接参加秋季活动？",
+      "expected_document_ids": [
+        "campaign_selection"
+      ],
+      "expected_anchors": [
+        "待质检、已冻结、价格未校验、近七天退款异常、供应商交期未确认或商品页面缺少关键参数的商品，均不得直接参与。"
+      ]
+    },
+    {
+      "id": "selection-discount-limit",
+      "question": "秋季活动的常规折扣上限是多少？",
+      "expected_document_ids": [
+        "campaign_selection"
+      ],
+      "expected_anchors": [
+        "常规折扣不超过三十个百分点。"
+      ]
+    },
+    {
+      "id": "selection-stock-risk",
+      "question": "库存可售天数不足十天的商品参加活动需要什么？",
+      "expected_document_ids": [
+        "campaign_selection"
+      ],
+      "expected_anchors": [
+        "库存可售天数不足十天的商品需提供补货或限量方案。"
+      ]
+    },
+    {
+      "id": "playbook-shipping-start",
+      "question": "预热活动的发货时效从什么时间开始计算？",
+      "expected_document_ids": [
+        "campaign_playbook"
+      ],
+      "expected_anchors": [
+        "发货时效以支付成功时间起算，不以用户下单或加入购物车时间起算。"
+      ]
+    },
+    {
+      "id": "playbook-over-seven-days",
+      "question": "交期超过七天时，活动页面需要补充什么信息？",
+      "expected_document_ids": [
+        "campaign_playbook"
+      ],
+      "expected_anchors": [
+        "活动页必须补充发货预期说明"
+      ]
+    },
+    {
+      "id": "playbook-incident",
+      "question": "预热活动发生价格异常时先做什么？",
+      "expected_document_ids": [
+        "campaign_playbook"
+      ],
+      "expected_anchors": [
+        "应先关闭对应商品入口"
+      ]
+    },
+    {
+      "id": "pdf-delayed-cost",
+      "question": "投放花费日报延迟时，报告应该如何处理？",
+      "expected_document_ids": [
+        "channel_review"
+      ],
+      "expected_anchors": [
+        "投放花费日报延迟时，必须标记待补数，不能按零处理。"
+      ]
+    },
+    {
+      "id": "pdf-attribution-revenue",
+      "question": "渠道归因收入能否作为实际商品成交额？",
+      "expected_document_ids": [
+        "channel_review"
+      ],
+      "expected_anchors": [
+        "渠道归因收入只能作为渠道趋势参考，不能作为实际商品成交额。"
+      ]
+    },
+    {
+      "id": "pdf-gmv-definition",
+      "question": "支付商品GMV是否包含运费和退款到账额？",
+      "expected_document_ids": [
+        "channel_review"
+      ],
+      "expected_anchors": [
+        "支付商品GMV不包含运费，也不扣除退款到账额。"
+      ]
+    },
+    {
+      "id": "extended_01-core-rule",
+      "question": "《会员权益分层规则》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_01"
+      ],
+      "expected_anchors": [
+        "会员等级调整前需核对累计有效支付金额、退款到账和权益生效日期。"
+      ]
+    },
+    {
+      "id": "extended_02-core-rule",
+      "question": "《客服工单分级规范》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_02"
+      ],
+      "expected_anchors": [
+        "高风险客诉须在两小时内由值班负责人确认，不能仅用自动回复结案。"
+      ]
+    },
+    {
+      "id": "extended_03-core-rule",
+      "question": "《退货质检处理规则》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_03"
+      ],
+      "expected_anchors": [
+        "退回商品未经质检确认前不得恢复为可售库存。"
+      ]
+    },
+    {
+      "id": "extended_04-core-rule",
+      "question": "《价格审批与生效流程》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_04"
+      ],
+      "expected_anchors": [
+        "价格变更需记录审批人、生效时间和影响商品范围，禁止覆盖历史价格。"
+      ]
+    },
+    {
+      "id": "extended_05-core-rule",
+      "question": "《站内搜索词治理规范》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_05"
+      ],
+      "expected_anchors": [
+        "高流量搜索词调整前必须保留原词、调整原因和七日效果观察窗口。"
+      ]
+    },
+    {
+      "id": "extended_06-core-rule",
+      "question": "《直播排期与库存协同》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_06"
+      ],
+      "expected_anchors": [
+        "直播商品在开播前一天必须确认可用库存和限购数量。"
+      ]
+    },
+    {
+      "id": "extended_07-core-rule",
+      "question": "《内容渠道素材审核》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_07"
+      ],
+      "expected_anchors": [
+        "素材中出现价格、赠品或时效承诺时，必须与当前活动配置逐项核对。"
+      ]
+    },
+    {
+      "id": "extended_08-core-rule",
+      "question": "《达人合作结算规则》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_08"
+      ],
+      "expected_anchors": [
+        "达人佣金结算以去重后的支付订单为依据，不以平台曝光或点击替代。"
+      ]
+    },
+    {
+      "id": "extended_09-core-rule",
+      "question": "《客诉风险预警方案》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_09"
+      ],
+      "expected_anchors": [
+        "同一商品七天内出现三起同类质量投诉时，应暂停活动入口并启动专项核查。"
+      ]
+    },
+    {
+      "id": "extended_10-core-rule",
+      "question": "《组合装商品管理规则》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_10"
+      ],
+      "expected_anchors": [
+        "组合装拆分或改包后必须重新确认净含量、成本和库存扣减关系。"
+      ]
+    },
+    {
+      "id": "extended_11-core-rule",
+      "question": "《赠品配置管理规范》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_11"
+      ],
+      "expected_anchors": [
+        "赠品库存不足时不得继续展示无条件赠送承诺，应先调整活动页面。"
+      ]
+    },
+    {
+      "id": "extended_12-core-rule",
+      "question": "《优惠券生命周期规则》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_12"
+      ],
+      "expected_anchors": [
+        "优惠券停用后仍需保留已领取用户的适用范围和有效期记录。"
+      ]
+    },
+    {
+      "id": "extended_13-core-rule",
+      "question": "《满减活动配置规范》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_13"
+      ],
+      "expected_anchors": [
+        "满减门槛变更前需同时核对商品范围、叠加规则和实际到手价。"
+      ]
+    },
+    {
+      "id": "extended_14-core-rule",
+      "question": "《新品冷启动运营手册》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_14"
+      ],
+      "expected_anchors": [
+        "新品冷启动的首周结论需区分样本不足与真实转化表现。"
+      ]
+    },
+    {
+      "id": "extended_15-core-rule",
+      "question": "《爆品监控与限量策略》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_15"
+      ],
+      "expected_anchors": [
+        "爆品库存覆盖低于交期加七天安全库存时，应启动限量或补货评估。"
+      ]
+    },
+    {
+      "id": "extended_16-core-rule",
+      "question": "《长尾商品治理方案》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_16"
+      ],
+      "expected_anchors": [
+        "长尾商品下架前需核对在售订单、售后窗口和剩余库存处置方案。"
+      ]
+    },
+    {
+      "id": "extended_17-core-rule",
+      "question": "《竞品价格监控规范》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_17"
+      ],
+      "expected_anchors": [
+        "竞品价格仅作为市场参考，调整自有价格仍需基于成本和毛利边界审批。"
+      ]
+    },
+    {
+      "id": "extended_18-core-rule",
+      "question": "《数据异常排查手册》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_18"
+      ],
+      "expected_anchors": [
+        "指标突变先检查数据截止日、去重逻辑和数据延迟，再判断业务变化。"
+      ]
+    },
+    {
+      "id": "extended_19-core-rule",
+      "question": "《经营看板口径维护》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_19"
+      ],
+      "expected_anchors": [
+        "看板指标变更必须同时更新口径说明、生效日期和历史可比性提示。"
+      ]
+    },
+    {
+      "id": "extended_20-core-rule",
+      "question": "《业务连续性应急预案》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_20"
+      ],
+      "expected_anchors": [
+        "核心系统不可用时，只能执行已批准的降级流程，不得人工补录未经核验的经营结论。"
+      ]
+    },
+    {
+      "id": "extended_21-core-rule",
+      "question": "《用户分群运营说明》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_21"
+      ],
+      "expected_anchors": [
+        "用户分群标签只能使用已确认的行为数据，不得将推测属性用于差异化承诺。"
+      ]
+    },
+    {
+      "id": "extended_22-core-rule",
+      "question": "《复购运营触达规范》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_22"
+      ],
+      "expected_anchors": [
+        "复购触达前需排除已退款、投诉处理中和明确拒收营销信息的用户。"
+      ]
+    },
+    {
+      "id": "extended_23-core-rule",
+      "question": "《会员短信发送规范》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_23"
+      ],
+      "expected_anchors": [
+        "营销短信发送前必须校验退订状态、发送频次和活动有效期。"
+      ]
+    },
+    {
+      "id": "extended_24-core-rule",
+      "question": "《库存库龄管理规则》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_24"
+      ],
+      "expected_anchors": [
+        "库龄超过九十天的商品需单独评估价格、质量和处置路径。"
+      ]
+    },
+    {
+      "id": "extended_25-core-rule",
+      "question": "《断货响应操作说明》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_25"
+      ],
+      "expected_anchors": [
+        "确认断货后应同步关闭对应渠道入口，并保留未发货订单处理清单。"
+      ]
+    },
+    {
+      "id": "extended_26-core-rule",
+      "question": "《仓库产能规划说明》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_26"
+      ],
+      "expected_anchors": [
+        "大促前的仓库产能评估必须包含人力、波次、包材和物流揽收上限。"
+      ]
+    },
+    {
+      "id": "extended_27-core-rule",
+      "question": "《采购订单对账说明》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_27"
+      ],
+      "expected_anchors": [
+        "采购对账以确认订单、实际到货和验收数量三者一致为完成条件。"
+      ]
+    },
+    {
+      "id": "extended_28-core-rule",
+      "question": "《发票与结算资料规范》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_28"
+      ],
+      "expected_anchors": [
+        "发票信息变更必须在结算前确认，不能在已出账后用备注替代更正。"
+      ]
+    },
+    {
+      "id": "extended_29-core-rule",
+      "question": "《用户授权与隐私处理》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_29"
+      ],
+      "expected_anchors": [
+        "用户撤回授权后应停止对应用途的数据处理并记录生效时间。"
+      ]
+    },
+    {
+      "id": "extended_30-core-rule",
+      "question": "《渠道预算月度明细》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_30"
+      ],
+      "expected_anchors": [
+        "渠道预算调整超过原计划百分之十时必须重新确认负责人和预期目标。"
+      ]
+    },
+    {
+      "id": "extended_31-core-rule",
+      "question": "《素材AB实验记录》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_31"
+      ],
+      "expected_anchors": [
+        "实验结论仅在样本量、观察周期和指标口径均满足预设条件时发布。"
+      ]
+    },
+    {
+      "id": "extended_32-core-rule",
+      "question": "《商品标签维护明细》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_32"
+      ],
+      "expected_anchors": [
+        "商品标签变更需要记录旧标签、新标签、生效日期和影响页面。"
+      ]
+    },
+    {
+      "id": "extended_33-core-rule",
+      "question": "《销售预测版本明细》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_33"
+      ],
+      "expected_anchors": [
+        "预测版本替换时应保留旧版本、假设变化和误差复核结果。"
+      ]
+    },
+    {
+      "id": "extended_34-core-rule",
+      "question": "《活动成本归集明细》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_34"
+      ],
+      "expected_anchors": [
+        "活动成本必须区分优惠承担、赠品、运费和渠道投放，不得合并为单一金额。"
+      ]
+    },
+    {
+      "id": "extended_35-core-rule",
+      "question": "《供应商绩效评分表》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_35"
+      ],
+      "expected_anchors": [
+        "供应商评分应同时考虑承诺交期、实际到货、质量异常和沟通响应。"
+      ]
+    },
+    {
+      "id": "extended_36-core-rule",
+      "question": "《入库质检抽检记录》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_36"
+      ],
+      "expected_anchors": [
+        "抽检不合格批次在复检通过前不得进入可售库存。"
+      ]
+    },
+    {
+      "id": "extended_37-core-rule",
+      "question": "《配送异常工单明细》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_37"
+      ],
+      "expected_anchors": [
+        "配送异常工单必须记录异常类型、承诺时间、用户影响和关闭依据。"
+      ]
+    },
+    {
+      "id": "extended_38-core-rule",
+      "question": "《年度促销复盘手册》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_38"
+      ],
+      "expected_anchors": [
+        "促销复盘结论必须说明活动目标、对比区间、数据截止日和证据来源。"
+      ]
+    },
+    {
+      "id": "extended_39-core-rule",
+      "question": "《供应风险处置手册》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_39"
+      ],
+      "expected_anchors": [
+        "供应商确认延期后，应重新评估活动商品范围和用户侧发货承诺。"
+      ]
+    },
+    {
+      "id": "extended_40-core-rule",
+      "question": "《跨仓调拨执行手册》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_40"
+      ],
+      "expected_anchors": [
+        "跨仓调拨在出库、在途和入库状态均确认前，不得重复计入可用库存。"
+      ]
+    },
+    {
+      "id": "extended_41-core-rule",
+      "question": "《大促客服保障手册》的核心控制规则是什么？",
+      "expected_document_ids": [
+        "extended_41"
+      ],
+      "expected_anchors": [
+        "大促期间的客服承诺必须与库存、发货和活动规则保持一致。"
+      ]
+    },
+    {
+      "id": "extended_42-core-rule",
+      "question": "《渠道归因月度复盘》中，渠道归因结果的使用边界是什么？",
+      "expected_document_ids": [
+        "extended_42"
+      ],
+      "expected_anchors": [
+        "渠道归因结果仅用于趋势观察，不能替代订单支付事实。"
+      ]
+    },
+    {
+      "id": "extended_43-core-rule",
+      "question": "《支付与退款数据核验》中，支付订单金额与退款到账额应如何统计？",
+      "expected_document_ids": [
+        "extended_43"
+      ],
+      "expected_anchors": [
+        "支付订单金额与退款到账额必须分开统计，不能相互抵扣。"
+      ]
+    },
+    {
+      "id": "extended_44-core-rule",
+      "question": "《库存风险控制报告》中，什么样的在途库存可以计入可靠供给？",
+      "expected_document_ids": [
+        "extended_44"
+      ],
+      "expected_anchors": [
+        "只有到货日期和数量均已确认的在途库存，才能计入可靠供给。"
+      ]
+    },
+    {
+      "id": "extended_45-core-rule",
+      "question": "《活动页面巡检报告》中，发现价格错误时先做什么？",
+      "expected_document_ids": [
+        "extended_45"
+      ],
+      "expected_anchors": [
+        "发现面向用户的价格错误时，应先关闭受影响入口，再修正页面与配置。"
+      ]
     }
   ]
 }
