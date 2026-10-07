@@ -37,6 +37,77 @@ SUBTASK_TOOLS = {
     "search_metric_definitions",
 }
 
+# 最终回答只展示运营术语；原始字段名仍保留在证据详情中，供追溯与排查使用。
+USER_FACING_FIELD_NAMES = {
+    "gross_profit_before_refunds": "退款前商品毛利",
+    "net_contribution_percent": "对整体变化的贡献占比",
+    "reliable_in_transit_units": "按期可到货的在途数量",
+    "overdue_in_transit_units": "已逾期的在途数量",
+    "demand_units_next_window": "预测窗口需求量",
+    "supply_units_next_window": "预测窗口可用供给",
+    "suggested_order_units": "建议补货量",
+    "stockout_before_lead": "到货前缺货风险",
+    "observed_daily_units": "历史日均销量",
+    "minimum_margin_rate": "毛利率下限",
+    "minimum_coverage_days": "最低库存覆盖天数",
+    "maximum_discount_percent": "最高折扣比例",
+    "eligible_sku_count": "参与商品数量",
+    "recommended_sku_count": "建议参与商品数量",
+    "candidate_sku_count": "候选商品数量",
+    "covered_product_count": "覆盖商品数量",
+    "shown_sku_count": "展示商品数量",
+    "minimum_order": "最小订货量",
+    "coverage_days": "库存可售天数",
+    "lead_days": "交期（天）",
+    "in_transit": "在途库存",
+    "available": "可用库存",
+    "physical": "实物库存",
+    "reserved": "预占库存",
+    "paid_gmv": "支付商品GMV",
+    "paid_orders": "支付订单数",
+    "refund_amount": "退款到账额",
+    "refund_cases": "退款笔数",
+    "change_percent": "变化比例",
+    "previous_total": "对比期合计",
+    "current_total": "目标期合计",
+    "other_delta": "其余项目变化额",
+    "discount_percent": "折扣比例",
+    "discount_cents": "优惠金额",
+    "budget_cents": "活动预算",
+    "unit_price_cents": "商品单价",
+    "unit_cost_cents": "商品单位成本",
+    "price_cents": "商品售价",
+    "cost_cents": "商品成本",
+    "spend_cents": "投放花费",
+    "order_visitor_ratio": "订单访客转化率",
+    "product_id": "商品SKU",
+    "campaign_id": "活动编号",
+    "product_ids": "参与商品范围",
+    "as_of": "数据截止日",
+    "aov": "商品客单价",
+    "impressions": "曝光量",
+    "clicks": "点击量",
+    "sessions": "访问次数",
+}
+
+# 记忆确认与会话状态是流程事实，不会产生可引用的经营证据。
+STATE_ONLY_CRITERION = re.compile(r"长期(?:偏好|记忆)|记忆(?:候选|请求|冲突|确认)|会话(?:状态|历史)|任务状态")
+
+
+def humanize_user_answer(text: str) -> str:
+    """将模型偶然写入的内部字段名替换为运营人员可理解的业务术语。"""
+    for field, label in sorted(USER_FACING_FIELD_NAMES.items(), key=lambda item: -len(item[0])):
+        text = re.sub(rf"\b{re.escape(field)}\b", label, text)
+    return text
+
+
+def criterion_requires_evidence(criterion: dict, state: dict | None = None) -> bool:
+    """仅允许系统明确标记的交付边界或流程状态标准免于绑定经营证据。"""
+    optional = set((state or {}).get("evidence_optional_criteria", []))
+    if criterion.get("id") in optional:
+        return False
+    return not STATE_ONLY_CRITERION.search(str(criterion.get("description", "")))
+
 
 def initial_state(goal, settings):
     # 任务状态只保存可恢复的业务事实；模型上下文在调用前按需组装。
@@ -79,6 +150,7 @@ def initial_state(goal, settings):
         fingerprints={},
         subtasks={},
         promotion_fast_path=None,
+        evidence_optional_criteria=[],
         constraint_version=1,
     )
 
@@ -509,6 +581,7 @@ class AgentRuntime:
                 steps={},
                 step_tools={},
                 subtasks={},
+                evidence_optional_criteria=[],
                 answer="",
                 feedback="资料权限、版本或长期记忆已变化，请重新核对当前约束和证据。",
                 finalizing=False,
@@ -783,16 +856,19 @@ class AgentRuntime:
         return None
 
     @staticmethod
-    def _narrow_plan_criteria(state, criteria, reason):
+    def _narrow_plan_criteria(state, criteria, reason, *, evidence_optional_criteria=None):
         """收窄模型自行扩展的完成条件，同时在计划快照中保留审计记录。"""
 
         if not state.get("plan"):
             return
         state["plan"]["criteria"] = criteria
+        if evidence_optional_criteria is not None:
+            state["evidence_optional_criteria"] = sorted(set(evidence_optional_criteria))
         if state.get("plans"):
             state["plans"][-1]["scope_narrowed"] = {
                 "reason": reason,
                 "criteria": copy.deepcopy(criteria),
+                "evidence_optional_criteria": copy.deepcopy(state.get("evidence_optional_criteria", [])),
             }
 
     def _activate_diagnostic_fast_path(self, task, state):
@@ -894,7 +970,12 @@ class AgentRuntime:
         ]
         if requires_artifact:
             criteria.append({"id": "c3", "description": "保存可追溯到商品事实的草稿成果。"})
-        self._narrow_plan_criteria(state, criteria, "文案任务允许保留待补充项，品牌资料缺失不是阻断条件。")
+        self._narrow_plan_criteria(
+            state,
+            criteria,
+            "文案任务允许保留待补充项，品牌资料缺失不是阻断条件。",
+            evidence_optional_criteria=["c2"],
+        )
         state["product_copy_fast_path"] = {
             "status": "artifact_saved" if artifact else "ready",
             "product_evidence_id": existing.get("product_evidence_id") if isinstance(existing, dict) else product["evidence_id"],
@@ -1227,6 +1308,8 @@ class AgentRuntime:
             for s in plan.steps
         }
         state["plan"] = plan.model_dump()
+        # 模型重规划后不继承领域快速路径的豁免项，避免宽松校验泄漏到新计划。
+        state["evidence_optional_criteria"] = []
         state["step_tools"] = {
             s.id: state["step_tools"].get(s.id, 0) if old.get(s.id) == s.model_dump() else 0
             for s in plan.steps
@@ -1415,6 +1498,23 @@ class AgentRuntime:
         )
         return action.kind != "ask_user"
 
+    async def _deliver_partial_completion(self, task, state, decision, gaps):
+        """完成检查不足时保留可验证结论并终止为部分完成，避免模型重复提交 finish。"""
+        has_supported_assessment = any(
+            assessment.satisfied and (assessment.evidence_ids or assessment.artifact_ids)
+            for assessment in decision.assessments
+        )
+        answer = decision.answer.strip() if has_supported_assessment else "已取得部分过程数据，但尚未形成可验证的完整结论。"
+        detail = "；".join(gaps)
+        state["answer"] = f"{answer}\n\n> 本次以部分完成交付。未满足项：{detail}。"
+        state["assessments"] = [assessment.model_dump() for assessment in decision.assessments]
+        state["feedback"] = "完整交付条件未全部满足，已停止继续重试。"
+        partial = decision.model_copy(
+            update={"kind": "stop", "reason": "完整交付条件未全部满足：" + detail, "answer": state["answer"]}
+        )
+        await self.commit(task, state, "evaluation", partial.model_dump(), status="partial")
+        return False
+
     async def apply_decision(self, task, state, decision):
         # Evaluate 的结论只能推进、交付、追问或阻塞，不能绕过工具结果修改事实。
         if state.get("finalizing") and decision.kind in {"continue", "replan"}:
@@ -1430,6 +1530,7 @@ class AgentRuntime:
             }
             if not set(re.findall(r"artifact:(ar_[a-zA-Z0-9_-]+)", decision.answer)) <= valid_artifacts:
                 raise ValueError("最终回答引用了不存在或过期的成果")
+            decision.answer = humanize_user_answer(decision.answer)
         status = "running"
         if decision.kind == "continue":
             if not self.current_step(state):
@@ -1442,24 +1543,38 @@ class AgentRuntime:
             status = "waiting_user"
             state["waiting_question"] = decision.answer or decision.reason
         elif decision.kind == "finish":
-            expected = {c["id"] for c in state["plan"]["criteria"]}
-            if {c.criterion_id for c in decision.assessments} != expected or len(decision.assessments) != len(
-                expected
-            ):
-                raise ValueError("完成检查必须逐项覆盖所有成功标准")
+            criteria = {criterion["id"]: criterion for criterion in state["plan"]["criteria"]}
+            expected = set(criteria)
+            actual = {assessment.criterion_id for assessment in decision.assessments}
+            gaps = []
+            if actual != expected or len(decision.assessments) != len(expected):
+                missing = sorted(expected - actual)
+                unexpected = sorted(actual - expected)
+                if missing:
+                    gaps.append("未逐项评估成功标准：" + "、".join(missing))
+                if unexpected:
+                    gaps.append("评估包含无效成功标准：" + "、".join(unexpected))
+                if len(decision.assessments) != len(actual):
+                    gaps.append("成功标准评估存在重复项")
             artifacts = {
                 a["artifact_id"]
                 for a in state["artifacts"]
                 if a.get("constraint_version") == state["constraint_version"]
             }
             for assessment in decision.assessments:
+                if assessment.criterion_id not in criteria:
+                    continue
                 self.check_evidence(state, assessment.evidence_ids)
-                if (
-                    not assessment.satisfied
-                    or not set(assessment.artifact_ids) <= artifacts
-                    or not (assessment.evidence_ids or assessment.artifact_ids)
+                if not set(assessment.artifact_ids) <= artifacts:
+                    raise ValueError("成功标准引用了不存在或过期的成果")
+                if not assessment.satisfied:
+                    gaps.append(f"{assessment.criterion_id} 尚未满足")
+                elif criterion_requires_evidence(criteria[assessment.criterion_id], state) and not (
+                    assessment.evidence_ids or assessment.artifact_ids
                 ):
-                    raise ValueError("尚有成功标准缺少真实有效的证据/成果，应继续或部分完成")
+                    gaps.append(f"{assessment.criterion_id} 缺少业务证据或成果")
+            if gaps:
+                return await self._deliver_partial_completion(task, state, decision, gaps)
             if not decision.answer.strip():
                 raise ValueError("完成时必须给出用户可读的最终交付")
             status = "completed"

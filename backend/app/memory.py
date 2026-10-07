@@ -19,6 +19,9 @@ from app.models import Evidence, uid
 
 KINDS = {"work_profile", "analysis_preference", "answer_preference", "focus_direction", "stable_constraint"}
 UNSET = object()
+PREFERENCE_COMMAND = re.compile(
+    r"^(?:(?P<update>更新|修改|调整)(?:长期)?(?:偏好|记忆)|(?:新增|设置|保存)?长期偏好)[：:，,\s]+(?P<content>.+?)\s*$"
+)
 
 
 def _validate_memory_content(content):
@@ -62,6 +65,53 @@ async def explicit_forget(session, user_id, text):
         if all_records
         else "已忘记该长期记忆，后续模型调用不再采用。"
     )
+
+
+def _preference_similarity(left: str, right: str) -> float:
+    left = re.sub(r"[^\u4e00-\u9fffA-Za-z]", "", left)
+    right = re.sub(r"[^\u4e00-\u9fffA-Za-z]", "", right)
+    if len(left) < 2 or len(right) < 2:
+        return 0.0
+    left_pairs = {left[index : index + 2] for index in range(len(left) - 1)}
+    right_pairs = {right[index : index + 2] for index in range(len(right) - 1)}
+    return len(left_pairs & right_pairs) / max(1, len(left_pairs | right_pairs))
+
+
+async def explicit_preference(session, user_id, text, *, task, source_seq: int):
+    """处理独立的长期偏好命令，不将其误当作当前任务的追问。"""
+    match = PREFERENCE_COMMAND.fullmatch(text.strip())
+    if not match:
+        return None
+    content = match.group("content").strip()
+    _validate_memory_content(content)
+    replacement = None
+    if match.group("update"):
+        memories = list(
+            await session.scalars(
+                select(UserMemory).where(UserMemory.user_id == user_id, UserMemory.status == "active")
+            )
+        )
+        scored = sorted(
+            ((_preference_similarity(content, item.content), item) for item in memories),
+            key=lambda item: item[0],
+            reverse=True,
+        )
+        if scored and scored[0][0] >= 0.12:
+            replacement = scored[0][1]
+    candidate = await propose(
+        session,
+        user_id,
+        content,
+        kind="answer_preference",
+        task=task,
+        source=text,
+        source_seq=source_seq,
+        replaces_id=replacement.id if replacement else None,
+        replaces_version=replacement.version if replacement else None,
+    )
+    if replacement:
+        return f"已生成长期偏好候选，确认后将替代“{replacement.content}”。原分析任务不会重新执行。"
+    return "已生成长期偏好候选，确认后才会在后续任务中生效。原分析任务不会重新执行。"
 
 
 async def propose(
@@ -245,7 +295,11 @@ async def append_history(session, task, seq, kind, payload, settings):
     session.add(unit)
     await session.flush()
     session.add(BackgroundJob(key="history:" + unit.id, kind="history", target_id=unit.id, task_id=task.id))
-    if kind in {"user", "user_control"} and (kind == "user" or payload.get("action") == "message"):
+    if (
+        kind in {"user", "user_control"}
+        and (kind == "user" or payload.get("action") == "message")
+        and not payload.get("memory_command")
+    ):
         text = payload.get("content", payload.get("message", ""))
         match = re.match(r"^(?:请|帮我)?记住[：:，,\s]*(.+)$", text)
         if match:

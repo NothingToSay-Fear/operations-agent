@@ -14,9 +14,45 @@ from app.agent.contracts import (
     SubtaskSpec,
     ToolCall,
 )
-from app.agent.runtime import AgentRuntime, LeaseLost, compact_observations, initial_state
+from app.agent.runtime import (
+    AgentRuntime,
+    LeaseLost,
+    compact_observations,
+    criterion_requires_evidence,
+    humanize_user_answer,
+    initial_state,
+)
 from app.agent.tools import calculate
 from app.models import Artifact, Evidence, Task, TaskEvent
+
+
+def test_humanize_user_answer_hides_internal_field_names():
+    answer = (
+        "lead_days 为 7，minimum_order 为 100，available 为 80；"
+        "支付指标 paid_gmv 较前期下降，数据截止日字段为 as_of。"
+    )
+
+    rendered = humanize_user_answer(answer)
+
+    assert "交期（天） 为 7" in rendered
+    assert "最小订货量 为 100" in rendered
+    assert "可用库存 为 80" in rendered
+    assert "支付商品GMV" in rendered
+    assert "数据截止日" in rendered
+    assert not any(field in rendered for field in ("lead_days", "minimum_order", "available", "paid_gmv", "as_of"))
+
+
+def test_memory_state_criterion_does_not_require_business_evidence():
+    assert not criterion_requires_evidence({"description": "说明长期偏好冲突的处理结果"})
+    assert criterion_requires_evidence({"description": "给出渠道支付商品GMV变化及证据"})
+    assert not criterion_requires_evidence(
+        {"id": "c2", "description": "将缺失资料标为待补充"},
+        {"evidence_optional_criteria": ["c2"]},
+    )
+    assert criterion_requires_evidence(
+        {"id": "c1", "description": "给出商品事实"},
+        {"evidence_optional_criteria": ["c2"]},
+    )
 
 
 class ProtocolModel:
@@ -878,6 +914,107 @@ async def test_fabricated_completion_rejected(database, settings):
     await AgentRuntime(database, settings, Liar()).run(tid)
     async with database.sessions() as session:
         assert (await session.get(Task, tid)).status == "failed"
+
+
+async def test_incomplete_finish_becomes_partial_without_repeated_invalid_decisions(database, settings):
+    class IncompleteCompletion:
+        async def decide(self, phase, context):
+            assert phase == "evaluate"
+            return Decision(
+                kind="finish",
+                reason="已有部分结论",
+                answer="渠道结论已完成，但商品结论尚未核验。",
+                assessments=[
+                    Assessment(criterion_id="c1", satisfied=True, evidence_ids=["ev_present"], note="渠道已核验"),
+                    Assessment(criterion_id="c2", satisfied=False, note="商品证据不足"),
+                ],
+            ), {}
+
+    plan = Plan(
+        summary="渠道与商品分析",
+        criteria=[
+            Criterion(id="c1", description="给出渠道变化并引用业务证据"),
+            Criterion(id="c2", description="给出商品变化并引用业务证据"),
+        ],
+        steps=[Step(id="s1", objective="汇总结论", done_when="完成分析")],
+        change_reason="初始规划",
+    )
+    tid = await new_task(
+        database,
+        settings,
+        phase="evaluate",
+        plan=plan.model_dump(),
+        observations=[{"evidence_id": "ev_present", "status": "success", "data": {}, "constraint_version": 1}],
+    )
+
+    await AgentRuntime(database, settings, IncompleteCompletion()).run(tid)
+
+    async with database.sessions() as session:
+        task = await session.get(Task, tid)
+        assert task.status == "partial"
+        assert "本次以部分完成交付" in task.state["answer"]
+        assert task.state["invalid_outputs"] == 0
+        assert task.state["usage"]["model_calls"] == 1
+
+
+async def test_product_copy_pending_fields_can_finish_without_brand_material_evidence(database, settings):
+    phases = []
+
+    class ProductCopyCompletion:
+        async def decide(self, phase, context):
+            phases.append(phase)
+            if phase != "evaluate":
+                raise RuntimeError(f"unexpected phase: {phase}")
+            return Decision(
+                kind="finish",
+                reason="商品事实已核实，品牌资料缺失已明确标注",
+                answer="商品详情页初稿已完成；品牌规范和未提供参数均标为待补充。",
+                assessments=[
+                    Assessment(
+                        criterion_id="c1",
+                        satisfied=True,
+                        evidence_ids=["ev_product"],
+                        note="仅使用商品事实撰写。",
+                    ),
+                    Assessment(
+                        criterion_id="c2",
+                        satisfied=True,
+                        note="品牌资料未命中，已标注待补充且未作猜测。",
+                    ),
+                ],
+            ), {}
+
+    plan = Plan(
+        summary="商品详情页初稿",
+        criteria=[
+            Criterion(id="c1", description="仅使用已取得的商品事实生成详情页文案。"),
+            Criterion(id="c2", description="将缺失的品牌规范或商品参数明确标为待补充，不作猜测。"),
+        ],
+        steps=[Step(id="s1", objective="交付详情页初稿", done_when="事实与待补充项均已说明")],
+        change_reason="商品事实已齐备",
+    )
+    tid = await new_task(
+        database,
+        settings,
+        phase="evaluate",
+        plan=plan.model_dump(),
+        plans=[{"version": 1, "plan": plan.model_dump(), "constraint_version": 1, "execution_snapshot": {}}],
+        evidence_optional_criteria=["c2"],
+        product_copy_fast_path={"status": "ready", "product_evidence_id": "ev_product"},
+        observations=[
+            {"evidence_id": "ev_product", "status": "success", "data": {}, "constraint_version": 1},
+            {"evidence_id": "ev_brand_absent", "status": "empty", "data": {}, "constraint_version": 1},
+        ],
+    )
+
+    await AgentRuntime(database, settings, ProductCopyCompletion()).run(tid)
+
+    async with database.sessions() as session:
+        task = await session.get(Task, tid)
+        events = list(await session.scalars(select(TaskEvent).where(TaskEvent.task_id == tid)))
+        assert task.status == "completed", (phases, task.state, [(event.kind, event.payload) for event in events])
+        assert task.state["assessments"][1]["criterion_id"] == "c2"
+        assert task.state["assessments"][1]["evidence_ids"] == []
 
 
 @pytest.mark.parametrize("expr", ["__import__('os')", "x.__class__", "2**99999", "1/0"])

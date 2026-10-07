@@ -3,6 +3,7 @@ import json
 
 from httpx import ASGITransport, AsyncClient
 
+from app import access
 from app.models import Task, TaskEvent
 
 
@@ -109,6 +110,59 @@ async def test_conversation_restores_all_user_and_assistant_turns(client):
         ("assistant", "第二轮回答"),
     ]
     assert [turn["model_calls"] for turn in turns if turn["role"] == "assistant"] == [2, 1]
+
+
+async def test_context_change_keeps_historical_reply_visible(client):
+    task_id = (await client.post("/api/tasks", json={"goal": "分析库存"})).json()["id"]
+    database = client.test_app.state.db
+    async with database.sessions() as session, session.begin():
+        task = await session.get(Task, task_id)
+        task.state = {
+            **task.state,
+            "seq": 1,
+            "answer": "历史库存结论",
+            "plan": {"summary": "历史计划", "criteria": [], "steps": [], "change_reason": ""},
+            "context_scope_revision": 0,
+        }
+        task.status = "completed"
+        session.add(
+            TaskEvent(
+                task_id=task_id,
+                seq=1,
+                kind="evaluation",
+                payload={"kind": "finish", "answer": "历史库存结论", "scope_revision": 0},
+            )
+        )
+        await access.bump_scope(session, [task.user_id])
+
+    task = (await client.get(f"/api/tasks/{task_id}")).json()
+    assert task["state"]["answer"] == "历史库存结论"
+    assert task["state"]["plan"]["summary"] == "历史计划"
+    assert task["state"]["context_outdated"] is True
+    turns = (await client.get(f"/api/tasks/{task_id}/conversation")).json()
+    reply = next(turn for turn in turns if turn["role"] == "assistant")
+    assert reply["content"] == "历史库存结论"
+    assert reply["context_outdated"] is True
+
+
+async def test_conversation_uses_business_terms_for_historical_answers(client):
+    task_id = (await client.post("/api/tasks", json={"goal": "分析库存"})).json()["id"]
+    database = client.test_app.state.db
+    async with database.sessions() as session, session.begin():
+        session.add(
+            TaskEvent(
+                task_id=task_id,
+                seq=1,
+                kind="evaluation",
+                payload={"kind": "finish", "answer": "lead_days 为 7，minimum_order 为 100。"},
+            )
+        )
+
+    turns = (await client.get(f"/api/tasks/{task_id}/conversation")).json()
+    reply = next(turn for turn in turns if turn["role"] == "assistant")
+    assert "交期（天）" in reply["content"]
+    assert "最小订货量" in reply["content"]
+    assert "lead_days" not in reply["content"]
 
 
 async def test_documents_and_origin_protection(client):

@@ -77,16 +77,12 @@ async def document_users(session, doc, scope):
 
 
 async def references_allowed(session, user_id, data):
-    # 在输出引用前复核证据来源，阻止未注册模拟资料或已撤回资料泄漏。
-    """复核证据中引用的资料版本，禁止失效来源经证据回读重新进入上下文。"""
+    # 上下文版本变化只要求后续任务重建上下文，不能据此隐藏既有业务证据。
+    """复核证据中的资料版本，禁止已失效来源经证据回读重新进入上下文。"""
     if not isinstance(data, dict):
         return True
     if _contains_hidden_reference(data):
         return False
-    if data.get("scope_revision") is not None:
-        revision = await session.scalar(select(UserScope.revision).where(UserScope.user_id == user_id)) or 0
-        if data["scope_revision"] != revision:
-            return False
     for ref in data.get("source_refs", []):
         try:
             _, scope = await get_document(session, user_id, ref["document_id"])

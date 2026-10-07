@@ -537,6 +537,9 @@ button:focus-visible,a:focus-visible {
   font-size: 10px;
   margin-left: auto;
 }
+.context-outdated {
+  color: #b6a66c !important;
+}
 .agent-message>p {
   color: #aabb9f;
 }
@@ -820,13 +823,27 @@ button:focus-visible,a:focus-visible {
   padding-left: 14px;
   color: #859c78;
 }
-.inline-link {
+.inline-link,
+.citation-button {
   border: 0;
   background: #b5e8990d;
   color: var(--lime);
   padding: 1px 5px;
   border-radius: 4px;
   font-size: inherit;
+}
+.citation-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+.citation-button span {
+  font-size: 11px;
+}
+.citation-button code {
+  color: inherit;
+  font-size: 10px;
 }
 .json-view {
   white-space: pre-wrap;

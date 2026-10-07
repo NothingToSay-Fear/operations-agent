@@ -159,6 +159,51 @@ async def test_explicit_remember_is_only_candidate(client):
     assert (await client.get("/api/memories")).json() == []
 
 
+async def test_preference_update_creates_replacement_without_restarting_task(client):
+    original = (
+        await client.post(
+            "/api/memory-candidates",
+            json={"content": "运营建议最多给三条", "kind": "answer_preference"},
+        )
+    ).json()
+    accepted = (
+        await client.post(
+            f"/api/memory-candidates/{original['id']}/confirm",
+            json={"version": original["version"]},
+        )
+    ).json()
+    task = (await client.post("/api/tasks", json={"goal": "分析最近七天 GMV"})).json()
+
+    response = await client.post(
+        f"/api/tasks/{task['id']}/control",
+        json={"action": "message", "message": "更新长期偏好：运营建议固定给两条，不再使用三条规则"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert "原分析任务不会重新执行" in response.json()["state"]["answer"]
+    candidates = (await client.get("/api/memory-candidates")).json()
+    update = next(item for item in candidates if item["task_id"] == task["id"])
+    assert update["content"] == "运营建议固定给两条，不再使用三条规则"
+    assert update["replaces_id"] == accepted["id"]
+    assert update["replaces_version"] == 1
+
+
+async def test_new_task_preference_command_does_not_start_business_workflow(client):
+    response = await client.post(
+        "/api/tasks",
+        json={"goal": "长期偏好：运营建议最多给三条。请记录为长期记忆"},
+    )
+
+    assert response.status_code == 201
+    task = response.json()
+    assert task["status"] == "completed"
+    assert "已生成长期偏好候选" in task["state"]["answer"]
+    candidates = await client.get("/api/memory-candidates")
+    assert candidates.status_code == 200
+    assert candidates.json()[0]["content"] == "运营建议最多给三条。请记录为长期记忆"
+
+
 async def test_effective_constraints_replace_old_turn_and_full_messages_remain(client):
     goal = "分析数据截止日期之前七天的GMV，结合渠道和商品数据，给出三个有证据的运营建议。"
     task = (await client.post("/api/tasks", json={"goal": goal})).json()

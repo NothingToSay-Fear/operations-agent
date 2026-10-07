@@ -14,7 +14,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app import access, analytics, background, memory, task_context
-from app.agent.runtime import TERMINAL, initial_state, worker
+from app.agent.runtime import TERMINAL, humanize_user_answer, initial_state, worker
 from app.analytics import Query, StrictModel
 from app.auth import current_user, hash_password, token_hash, verify_password
 from app.config import get_settings
@@ -133,9 +133,8 @@ async def conversation_view(session, task):
             turn_kind = "notice"
         if not content:
             continue
-        if payload.get("scope_revision", revision) != revision:
-            content = "原资料或记忆范围已变化，此历史回复已隐藏，请重新提问以核验。"
-            turn_kind = "notice"
+        content = humanize_user_answer(content)
+        context_outdated = payload.get("scope_revision", revision) != revision
         turns.append(
             {
                 "id": row.id,
@@ -145,6 +144,7 @@ async def conversation_view(session, task):
                 "content": content,
                 "created_at": row.created_at,
                 "model_calls": turn_model_calls,
+                "context_outdated": context_outdated,
             }
         )
         model_calls_by_response_seq[row.seq] = turn_model_calls
@@ -161,6 +161,7 @@ async def conversation_view(session, task):
                 "content": current_answer,
                 "created_at": task.updated_at,
                 "model_calls": int(task.state.get("turn_usage", {}).get("model_calls", 0)),
+                "context_outdated": task.state.get("context_scope_revision", revision) != revision,
             }
         )
     persisted = list(
@@ -170,18 +171,16 @@ async def conversation_view(session, task):
     )
     merged = {(row["seq"], row["role"]): row for row in turns}
     for row in persisted:
-        content, kind = row.content, row.kind
-        if row.role == "assistant" and row.scope_revision != revision:
-            content = "原资料或记忆范围已变化，此历史回复已隐藏，请重新提问以核验。"
-            kind = "notice"
+        content = humanize_user_answer(row.content) if row.role == "assistant" else row.content
         merged[(row.seq, row.role)] = {
             "id": row.id,
             "seq": row.seq,
             "role": row.role,
-            "kind": kind,
+            "kind": row.kind,
             "content": content,
             "created_at": row.created_at,
             "model_calls": model_calls_by_response_seq.get(row.seq, 0),
+            "context_outdated": row.role == "assistant" and row.scope_revision != revision,
         }
     return sorted(merged.values(), key=lambda row: (row["seq"], 0 if row["role"] == "user" else 1))
 
@@ -196,14 +195,10 @@ async def safe_task_view(session, task):
             observation["arguments"] = {}
             invalid = True
     revision = await access.scope_revision(session, task.user_id)
-    if invalid or task.state.get("context_scope_revision", revision) != revision:
-        result["state"].update(
-            plan=None,
-            plans=[],
-            steps={},
-            answer="资料或记忆范围已变化，旧结论已隐藏，请继续任务重新核验。",
-            feedback="",
-        )
+    # 历史任务仍可查看；只有再次执行时，运行时才会以当前范围重建上下文。
+    result["state"]["context_outdated"] = (
+        invalid or task.state.get("context_scope_revision", revision) != revision
+    )
     return result
 
 
@@ -429,18 +424,20 @@ def create_app(settings=None, *, start_worker=True, model=None):
             )
             session.add(task)
             await session.flush()
+            notice = await memory.explicit_forget(session, user.id, task.goal)
+            if not notice:
+                notice = await memory.explicit_preference(session, user.id, task.goal, task=task, source_seq=0)
             message, _ = await task_context.record_user_message(
-                session, task, 0, task.goal, settings, kind="goal"
+                session, task, 0, task.goal, settings, kind="goal", update_constraints=not bool(notice)
             )
             await memory.append_history(
                 session,
                 task,
                 0,
                 "user",
-                {"content": task.goal, "message_ids": [message.id]},
+                {"content": task.goal, "message_ids": [message.id], "memory_command": bool(notice)},
                 settings,
             )
-            notice = await memory.explicit_forget(session, user.id, task.goal)
             if notice:
                 task.state = {**task.state, "answer": notice}
                 task.status = "completed"
@@ -499,11 +496,15 @@ def create_app(settings=None, *, start_worker=True, model=None):
                 if body.action == "message"
                 else None
             )
+            if body.action == "message" and not notice:
+                notice = await memory.explicit_preference(
+                    session, user.id, body.message, task=task, source_seq=state["seq"] + 1
+                )
             if notice:
                 state["messages"].append({"role": "user", "content": body.message.strip()})
                 state["messages"] = state["messages"][-settings.memory_recent_turn_limit :]
                 state["answer"] = notice
-                status = task.status
+                status = "completed"
             elif body.action == "pause":
                 if task.status not in {"queued", "running"}:
                     raise HTTPException(409, "当前任务没有正在执行")
@@ -573,6 +574,7 @@ def create_app(settings=None, *, start_worker=True, model=None):
                     update_constraints=not bool(notice),
                 )
             history_payload = body.model_dump()
+            history_payload["memory_command"] = bool(notice)
             if task_message:
                 history_payload["message_ids"] = [task_message.id]
             if notice:
@@ -623,12 +625,12 @@ def create_app(settings=None, *, start_worker=True, model=None):
                     for row in rows:
                         cursor = row.seq
                         current_revision = await access.scope_revision(session, user.id)
-                        visible_payload = row.payload
-                        if (
-                            row.kind != "user_control"
-                            and row.payload.get("scope_revision", current_revision) != current_revision
-                        ):
-                            visible_payload = {"message": "原资料或记忆范围已变化，此历史事件内容已隐藏"}
+                        visible_payload = copy.deepcopy(row.payload)
+                        if row.kind != "user_control":
+                            if not await access.references_allowed(session, user.id, row.payload):
+                                visible_payload = {"message": "资料来源已失效，内容已隐藏"}
+                            elif row.payload.get("scope_revision", current_revision) != current_revision:
+                                visible_payload["context_outdated"] = True
                         payload = json.dumps(
                             {"kind": row.kind, "payload": visible_payload, "at": row.created_at},
                             ensure_ascii=False,

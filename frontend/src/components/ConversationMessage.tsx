@@ -32,6 +32,9 @@ export default function ConversationMessage({
       <div className="agent-heading">
         <div className="mini-brand">序</div>
         <strong>{title}</strong>
+        {turn.context_outdated && (
+          <span className="context-outdated">历史记录：当前资料或偏好已变化</span>
+        )}
       </div>
       <Markdown text={turn.content} onEvidence={onEvidence} onArtifact={onArtifact} />
       <div className="answer-usage">本轮模型调用 {turn.model_calls ?? 0} 次</div>

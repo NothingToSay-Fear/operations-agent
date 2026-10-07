@@ -61,6 +61,7 @@ export type Task = {
     answer: string;
     waiting_question: string;
     feedback: string;
+    context_outdated?: boolean;
   };
 };
 
@@ -81,4 +82,5 @@ export type ConversationTurn = {
   content: string;
   created_at: number;
   model_calls?: number;
+  context_outdated?: boolean;
 };
