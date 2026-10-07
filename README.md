@@ -1,62 +1,123 @@
 # 序策 · Operations Agent
 
-面向电商运营的 Plan-and-Execute Agent。用户给出目标，模型制定计划、选择工具、查看实际结果并调整后续行动，交付有证据的分析、库存建议、活动方案和商品文案。
+面向电商运营的 Plan-and-Execute Agent。用户提出经营目标，系统规划调查步骤、调用受控工具、核验证据并调整后续行动，交付可追溯的经营分析、库存建议、活动方案和商品文案。
 
-**没有店铺实体或店铺维度。经营数据只读，Agent 不改价、不发布商品、不下采购单、不执行投放。**
+经营数据只读。系统不改价、不发布商品、不创建采购单、不执行投放或发送消息；不包含店铺实体、店铺维度或多店铺能力。
 
-## 当前能力
+需求见 PRD.md
 
-- 模型驱动的 Planner / Executor / Tools / Evaluator 显式 LangGraph 节点；库存补货和活动-成本-库存组合决策使用受控领域快速路径，服务端先完成全量聚合，再由模型交付结论。
-- Executor 可在一次结构化决策中选择最多 6 个相互独立的只读工具并行执行；写入成果和记忆候选仍保持单次、可审计执行。
-- 计划版本、步骤完成记录、工具证据、运行预算、用户干预及任务恢复。
-- 订单、商品、退款、库存、分批履约、渠道、广告、活动与知识资料工具。
-- 可复现、可对账的模拟数据；默认 180 天、200 个 SKU、约 5 万订单。
-- React 工作台：经营概览、任务进度、计划与证据、资料上传、报告版本及 Markdown/CSV 下载。
-- 会话可永久删除，并在一个事务中清理运行记录、证据、成果、任务记忆、后台作业及该会话产生的记忆候选和已确认长期记忆。
-- 用户会话/任务/私有资料隔离；经营库与应用库分离，PostgreSQL 独立只读角色。
-- 结构化/语义分块、版本化后台索引、PostgreSQL 全文与向量召回、RRF 和真实 BGE 精排。
-- 当前任务摘要与历史召回；长期记忆经用户确认后生效，支持修改、到期、停用和忘记。
-- 管理员公共资料和用户个人资料；公共资料由每个用户独立启用，不共享个人任务或记忆。
-- 32 个版本化 Plan-and-Execute 真实模型评测场景，具备确定性自动评分、质量门槛与回归基线；协议、权限、数值与恢复测试使用明确的测试替身。
+## 核心能力
 
-**未配置模型时可以查看数据和管理资料，任务会明确进入“待处理”。应用没有伪造分析的演示模型回退。**
+- **Plan-and-Execute 编排**：基于 LangGraph 显式推进 Guard、Plan、Execute、Tools、Evaluate；支持动态计划、重规划、暂停、恢复、取消和部分交付。
+- **多 Agent 调查**：主 Agent 可按需委派渠道、商品库存、知识资料和通用调查子任务，并行完成独立只读调查后统一核验交付。
+- **证据驱动交付**：工具原始结果持久化为 Evidence，模型仅接收压缩后的 Observation；长表和长文档可按 Evidence ID 定向回读。
+- **经营分析工具**：支持指标、周期贡献、商品、订单退款、库存、活动成本库存快照、渠道活动与受控计算。
+- **运营知识库**：支持 Markdown、TXT、CSV、PDF、DOCX 的上传、解析、版本管理、检索、精排和引用定位。
+- **记忆与上下文**：近期对话、滚动摘要、当前任务历史召回和确认型长期偏好；任务历史不跨任务读取。
+- **Tavily 联网搜索**：可选查询公开网页，返回标题、链接、摘要和发布日期，并独立保存为 Evidence。
+- **审计与评测**：展示计划、工具、证据、子 Agent、模型调用与异常原因；提供 RAG、记忆和 Agent 的版本化离线评测。
 
-需求见 [PRD.md](PRD.md)，实现说明见 [docs/TECH.md](docs/TECH.md)，验证与剩余验收见 [docs/VALIDATION.md](docs/VALIDATION.md)。
+## 架构概览
 
-## 本地启动（Python + Node.js）
+~~~
+用户问题
+  → Guard：身份、权限、预算、约束检查
+  → Plan：成功标准与步骤
+  → Execute：选择工具、批量只读查询或委派子 Agent
+  → Tools：经营数据 / 知识库 / Tavily / 计算
+  → Evidence：保存原始依据
+  → Observation：压缩后反馈模型
+  → Evaluate：继续、重规划、追问、完成或部分交付
+~~~
 
-需要 Python 3.12、Node.js 22.12+。Node 版本要求与当前使用的 Vite 工具链一致，参见 [Vite 官方说明](https://vite.dev/guide/)。SQLite 仅作为本地开发适配，Docker 使用 PostgreSQL/pgvector。
+主 Agent 负责计划和最终交付；临时子 Agent 只能在授权范围内调查，不可保存成果、修改记忆、委派其他子任务或读取其他任务历史。
 
-在项目根目录创建配置文件：
+## 技术栈
 
-```powershell
+- 后端：Python 3.12、FastAPI、SQLAlchemy、Alembic
+- Agent：LangChain、LangGraph、Pydantic 结构化输出
+- 数据：PostgreSQL、pgvector、GIN 全文索引、HNSW 向量索引
+- 检索：BAAI/bge-small-zh-v1.5、BAAI/bge-reranker-base、ts_rank_cd、RRF
+- 前端：React、TypeScript、Vite、Ant Design
+- 交付与验证：Docker Compose、Pytest、Ruff
+
+## 快速启动
+
+### 1. 准备配置
+
+在项目根目录创建 .env：
+
+~~~
 Copy-Item .env.example .env
-```
+~~~
 
-在 `.env` 中设置模型。支持兼容接口、Anthropic 或 Ollama，配置值不会通过前端返回：
+至少填写数据库密码和模型配置：
 
-```dotenv
+~~~
+POSTGRES_PASSWORD=你的数据库管理员密码
+APP_DB_PASSWORD=你的应用数据库密码
+COMMERCE_OWNER_PASSWORD=你的经营数据库所有者密码
+COMMERCE_READER_PASSWORD=你的经营数据库只读密码
+
 LLM_PROVIDER=openai
 LLM_MODEL=你的模型名称
-LLM_API_KEY=你的密钥
+LLM_API_KEY=你的模型密钥
 LLM_BASE_URL=你的兼容接口地址
-```
+~~~
 
-`LLM_BASE_URL` 为可选项；Ollama 使用 `LLM_PROVIDER=ollama`，设置本地模型名称，可不填密钥。模型必须支持工具调用和结构化输出。更改配置后重启后端。
+模型必须支持工具调用和结构化输出。若未配置模型，系统仍可查看数据、管理资料和查看审计记录，但不能完成 Agent 推理任务。
 
-如需查询公开平台规则、行业信息或近期动态，可额外配置 Tavily；未配置时联网搜索工具不会提供给 Agent：
+管理员默认账号：
 
-```dotenv
+~~~
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=adminadmin
+~~~
+
+部署到非本地环境前应更换管理员密码，并使用独立的高强度数据库密码。
+
+### 2. 配置可选 Tavily 联网搜索
+
+~~~
 TAVILY_API_KEY=你的 Tavily API 密钥
 TAVILY_TIMEOUT_SECONDS=12
 TAVILY_SEARCH_DEPTH=basic
-```
+~~~
 
-联网搜索仅返回标题、链接、摘要和发布日期，并作为独立 Evidence 保存。它不能替代经营数据库与资料中心中的业务事实。
+未配置 Tavily 密钥时，联网搜索工具不会出现在 Agent 工具目录。配置后，单次搜索默认返回 3 条，可在任务中指定 1 至 5 条结果。
 
-启动后端：
+### 3. 下载本地检索模型
 
-```powershell
+首次使用时下载向量和精排模型：
+
+~~~
+docker compose --profile setup run --rm --no-deps model-download
+~~~
+
+模型保存于根目录 models。业务请求不会在运行时自动下载模型。
+
+### 4. 启动服务
+
+~~~
+docker compose up -d --build
+docker compose ps
+~~~
+
+访问地址：
+
+- 工作台：http://127.0.0.1:5173
+- API 健康检查：http://127.0.0.1:8000/health
+- 数据库查看页：http://127.0.0.1:8081
+
+数据库查看页仅用于本地开发和排查。业务数据位于 commerce 数据库，应用数据位于 operations 数据库。
+
+### 5. 本地开发启动
+
+需要 Python 3.12 和 Node.js 22.12+。
+
+后端：
+
+~~~
 Set-Location backend
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements-retrieval.txt
@@ -64,156 +125,120 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m app.bootstrap
 .\.venv\Scripts\python.exe -m alembic upgrade head
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-```
-
-`app.bootstrap` 只在数据集不存在时生成数据，不覆盖已有数据。首次生成包含对账验证，结果打印为 JSON。请使用项目独立虚拟环境，避免系统已有的 Transformers/Hugging Face 版本冲突。本地默认在 API 进程启动维护 Worker；Docker 使用独立 Worker。
-
-另开终端启动前端：
-
-```powershell
-Set-Location frontend
-npm ci
-npm run dev
-```
-
-打开 <http://localhost:5173>，注册本地账号即可使用。默认管理员账号为 `admin`，密码为 `adminadmin`。浏览器使用 HttpOnly Cookie，开发模式通过 Vite 代理访问 API，无需把登录令牌保存在 localStorage。
-
-## Docker Compose 启动
-
-在根目录 `.env` 中填写四个独立的数据库密码，使用随机字母数字，避免未经 URL 编码的特殊字符影响连接串：
-
-- `POSTGRES_PASSWORD`：初始化管理员，仅数据库容器使用。
-- `APP_DB_PASSWORD`：任务、身份、报告和知识资料库。
-- `COMMERCE_OWNER_PASSWORD`：模拟数据初始化，只提供给 seed 容器。
-- `COMMERCE_READER_PASSWORD`：API 的经营数据库只读账号。
-
-```powershell
-docker compose --profile setup run --rm --no-deps model-download
-docker compose up -d --build
-docker compose ps
-```
-
-访问 <http://localhost:5173>。数据库查看页为 <http://localhost:8081>：服务器填写 `db`；查看业务数据时选择 `commerce` 数据库并使用 `commerce_reader` 账号。启动顺序为数据库初始化 → 模拟数据生成/对账 → Alembic 迁移与 API → Nginx 前端及独立维护 Worker。模型位于根目录 `models/` 并挂载到容器；若已有完整权重，可跳过下载命令。数据库不暴露宿主端口；应用和 Adminer 默认仅绑定本机。
-
-宿主端口冲突时，在 `.env` 中修改 `API_PORT`、`FRONTEND_PORT`、`ADMINER_PORT`，并同步 `CORS_ORIGINS`。后台任务独立于浏览器连接；刷新或断线不会取消任务。
-
-```powershell
-docker compose logs --tail 100 api
-docker compose logs --tail 100 seed
-docker compose logs --tail 100 worker
-docker compose stop
-```
-
-数据保存在命名卷。保留卷即可保留账号、任务与成果；此项目不会自动删除或重建已有经营数据。
-
-## 模拟数据与情境
-
-情境：`baseline`、`traffic_drop`、`stockout`、`refund_wave`、`promotion_margin`、`supply_delay`、`mixed`。情境标签只供生成器/评测器使用，不写入 Agent 可读取的资料和能力目录。
-
-切换本地只读数据源时，在 `.env` 使用绝对路径，例如：
-
-```dotenv
-```
-
-数值由订单、明细、付款和流水推导。访客按周期去重；支付商品 GMV 不含运费；退款以到账日统计；库存区分实物、预占、可用与在途。完整字段和边界见 [数据字典](docs/DATA.md)。
-
-## 资料检索
-
-上传 Markdown、TXT、CSV、PDF、DOCX，最大 8MB，文本上限 30 万字符。扫描 PDF 需要先 OCR。上传返回后由后台完成结构化解析、语义分块、中文词面索引和向量编码；界面显示进度、错误和重建入口。新版本完成后原子切换，不覆盖已有任务或经营数据。
-
-完整部署使用 `bge-small-zh-v1.5`（512 维）与 `bge-reranker-base`，下载脚本固定模型版本。PostgreSQL 内执行全文与向量候选召回，使用 GIN/HNSW 索引、RRF 融合及 Cross-Encoder 精排；SQLite 保留隔离测试适配。引用可定位标题、片段与 PDF 页码。模型不可用时明确显示词面或融合排序降级，不能将降级状态当作完整能力验收通过。
-
-本地模型路径在 `.env` 中配置，相对路径以 `backend/` 为基准；Docker 固定挂载 `/models`。模型只从本地加载，业务请求中不会自动下载。更换向量模型后须重建索引；更换向量维度需先迁移数据库。
-
-系统启动时会根据 `ADMIN_USERNAME` 和 `ADMIN_PASSWORD` 创建或校正管理员账号。管理员上传的文件始终作为管理员资料，不提供个人资料范围；普通用户只能上传自己的个人资料。管理员资料默认未加入任何用户的检索来源，每名用户自行启用；资料停用或删除后，检索、原文及相关证据读取都会重新校验权限。
-
-## 记忆
-
-- **任务内记忆**：完整保存每条用户/Agent 消息，结构化有效约束单独维护版本；模型默认读取最近 12 条原文，更早对话进入滚动摘要并可通过当前任务历史按需召回。工具、缓存和数据库查询均禁止读取其他任务，即使属于同一用户。
-- **长期记忆**：工作背景、回答偏好、分析习惯、近期关注和稳定约束。用户说“记住”或模型提取的内容都先进入候选，确认前不作为长期记忆使用。编辑也需要再次确认；可以停用、删除、设置有效期，或明确输入“忘记：完整内容”“清除所有记忆”。
-- 已确认的个人长期偏好可跨任务使用，但不会展开原任务历史；当前明确要求优先，旧库存、价格和销量不能当作当前事实。
-- 每次模型调用保存约束、摘要、近期消息、长期记忆、证据和历史单元的采用 ID/版本，便于复现上下文范围，不重复保存完整提示词。
-- 侧栏“长期记忆”管理候选与记录；任务页可查看当前有效约束、近期原文窗口、摘要状态和采用偏好。未配置对话模型时，显式候选确认及资料管理仍可用，自动摘要/候选提取显示等待模型。
-
-摘要和候选提取使用每任务最多 6 次的独立维护预算，并继续计入累计 Token 和成本；它们不占用用户新一轮追问的交互预算。查询扩展属于当前交互轮次，计入该轮模型预算。
-
-运行图按 `guard → plan / execute / tools / evaluate` 显式路由。中间计划步骤完成后直接进入下一个满足依赖的步骤，只在计划结束、关键失败、重规划或预算收尾时执行全局评估，避免每个小步骤额外消耗一次模型调用。数据库任务状态仍是唯一持久化执行来源，防止与框架 checkpoint 形成双重真相。
-
-当问题同时涉及活动、成本或毛利、库存或在途，且未要求完整 SKU 导出时，运行时会调用 `build_promotion_snapshot`。该工具在 PostgreSQL 侧计算活动参与 SKU 的折后毛利、库存覆盖和可靠在途，完整明细保留为 Evidence，模型只接收推荐商品、排除原因、约束和执行前核验项；用户要求保存方案时，系统随后只允许保存成果并进入最终评估。
-
-测试、RAG 评测和真实模型评测均使用独立 PostgreSQL/pgvector 容器，不使用 SQLite 作为验收环境：
-
-```powershell
-docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from tests tests
-docker compose -f docker-compose.test.yml down -v
-```
-
-RAG 评测使用独立的 `operations_test`、`commerce_test` 数据库和真实本地向量、精排模型：
-
-```powershell
-docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from rag-evaluation rag-evaluation
-docker compose -f docker-compose.test.yml down -v
-```
-
-评测集位于 `backend/evaluation/rag/v1/`：`documents/` 保存原始资料，`cases.json` 为可读、可格式化的问题、目标资料和文本锚点标注，`manifest.json` 定义 Top-K 与质量门槛。当前 v5 包含 60 份运营资料和 110 条问题；每份资料经正式解析后的正文不少于 1,000 字符，覆盖 Markdown、TXT、CSV、PDF、DOCX，以及长文标题层级、原生表格、三页中文 PDF 和大规模库存明细表。评测使用与正式上传一致的版本化文件解析、分段和索引流程；报告包含逐题文档命中、文本锚点命中、文档 Recall@5、文本锚点 Recall@5、MRR、`ts_rank_cd` 文档/文本锚点基线、无答案误命中、阶段耗时及当前任务历史隔离检查。
-
-人工核对一份通过的报告后，可将它写为回归基线；后续评测会对比 `baseline.json` 中受门槛约束的指标：
-
-```powershell
-docker compose -f docker-compose.test.yml run --rm rag-evaluation python -m app.rag_evaluation --write-baseline
-```
-
-记忆评测集位于 `backend/evaluation/memory/v1/`，覆盖多轮约束覆盖、上下文采用范围、当前任务历史检索、长期记忆确认与生命周期。案例以可读、可格式化的 `cases.json` 保存；评测使用真实 PostgreSQL、历史向量、全文检索、RRF 与精排；配置对话模型后，还会真实运行摘要并以逐条保留/臆造判断输出语义质量报告。
-
-```powershell
-docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from memory-evaluation memory-evaluation
-docker compose -f docker-compose.test.yml down -v
-
-# 人工核对通过报告后写入硬指标基线
-docker compose -f docker-compose.test.yml run --rm memory-evaluation python -m app.memory_evaluation --write-baseline
-```
-
-新增评测资料时，提交脱敏文件与对应 `cases.json` 标注。临时资料可放到被 Git 忽略的 `backend/evaluation/rag/local/`，并通过 `--dataset /app/evaluation/rag/local` 在隔离容器中运行。
-
-## 测试与评测
-
-后端测试必须在独立 PostgreSQL/pgvector 测试容器中运行：
-
-```powershell
-docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from tests tests
-docker compose -f docker-compose.test.yml down -v
-Set-Location backend
-python -m ruff check app tests
-python -m ruff format --check app tests migrations
-```
+~~~
 
 前端：
 
-```powershell
+~~~
 Set-Location frontend
-npm run build
-```
+npm ci
+npm run dev
+~~~
 
-真实模型评测同样只使用独立 PostgreSQL 测试库，需要已经配置可用模型，会产生实际模型调用费用：
+## Agent、工具与证据
 
-```powershell
+当前主 Agent 注册 19 个工具：
+
+| 分类 | 工具 |
+| --- | --- |
+| 数据范围与口径 | 数据能力、指标定义、指标定义检索 |
+| 经营分析 | 指标查询、周期比较、商品、订单退款、库存、活动成本库存快照、渠道活动 |
+| 资料与公开来源 | 资料检索、资料原文读取、Tavily 联网搜索 |
+| 证据与计算 | Evidence 读取、四则计算 |
+| 记忆与历史 | 当前任务历史检索、历史片段读取、长期记忆候选 |
+| 成果 | Markdown 报告与 CSV 保存 |
+
+一次 Execute 决策最多并行执行 6 个互不依赖的只读工具。成果保存和长期记忆候选属于写入动作，必须单独执行。
+
+工具调用结果分为两部分：
+
+- **Evidence** 保存原始数据、参数、状态和来源，供前端查看和后续定向读取。
+- **Observation** 是受字符预算限制的摘要，供模型继续决策。
+
+工具失败或查询为空会反馈给模型；模型可改参数、换工具、追问用户或停止并交付已验证的部分结果。相同参数的工具调用最多执行两次，任务还受模型调用、工具调用、重规划和活跃执行时间预算约束。
+
+## RAG 知识库
+
+上传支持 Markdown、TXT、CSV、PDF、DOCX，单文件最大 8MB，文本上限 30 万字符；扫描 PDF 需要先 OCR。
+
+~~~
+文档上传
+  → 结构化解析与分块
+  → 向量编码与版本发布
+  → PostgreSQL 全文候选 + 向量候选
+  → RRF 融合
+  → BGE Cross-Encoder 精排
+  → 片段、文档标题与 PDF 页码引用
+~~~
+
+资料按用户权限与启用范围检索。管理员上传的资料归管理员所有；普通用户上传的资料仅属于自己。每个用户独立决定是否启用管理员资料。资料被停用、删除或更新后，后续 Evidence 回读会重新校验权限与版本。
+
+## 记忆与上下文
+
+- **短期记忆**：默认保留最近 12 条原文；较早消息进入滚动摘要。
+- **任务历史**：完整消息以 HistoryUnit 保存，只在当前任务内通过全文、向量、RRF 与精排按需召回。
+- **长期记忆**：稳定偏好、工作背景和约束先作为候选，必须由用户确认后才能跨任务使用。
+- **上下文优先级**：当前指令 → 有效约束 → 当前证据 → 近期原文 → 任务摘要 → 相关任务历史 → 已确认长期记忆。
+
+每次模型调用记录实际采用的约束、消息、摘要、Evidence、HistoryUnit 与长期记忆版本，便于审计上下文范围。用户删除会话后，相关消息、运行、证据、成果、任务记忆、后台作业和该会话确认的长期记忆会一并永久删除。
+
+## 可观测性
+
+运行记录涵盖：
+
+- 计划版本、步骤状态、重规划原因和预算。
+- 模型调用次数、Token、耗时、结构化输出错误和模型服务异常。
+- 工具与子 Agent 调用、Evidence、检索阶段耗时、空结果和失败原因。
+- 最终回答、成果版本、成功标准与引用证据。
+
+前端可以查看执行计划、证据详情、任务记忆、成果和模型调用次数。证据引用会在弹窗中打开，而不是跳转到外部页面。
+
+## 测试与评测
+
+所有测试和评测使用隔离 PostgreSQL/pgvector 环境，不使用正在运行的应用数据。
+
+基础测试：
+
+~~~
+docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from tests tests
+docker compose -f docker-compose.test.yml down -v
+~~~
+
+RAG 评测：
+
+~~~
+docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from rag-evaluation rag-evaluation
+docker compose -f docker-compose.test.yml down -v
+~~~
+
+RAG 评测集位于 backend/evaluation/rag/v1，当前包含 60 份资料和 110 条问题，覆盖 Markdown、TXT、CSV、PDF、DOCX、长文层级、表格和多页 PDF。报告包含文档 Recall@5、文本锚点 Recall@5、MRR、ts_rank_cd 基线、无答案误命中和 P95 检索耗时。
+
+记忆评测：
+
+~~~
+docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from memory-evaluation memory-evaluation
+docker compose -f docker-compose.test.yml down -v
+~~~
+
+记忆评测集位于 backend/evaluation/memory/v1，当前包含 50 条场景，覆盖约束、任务历史隔离、摘要和长期记忆生命周期。
+
+Plan-and-Execute 评测：
+
+~~~
 docker compose -f docker-compose.test.yml run --rm agent-evaluation python -m app.evaluation --list
-docker compose -f docker-compose.test.yml run --rm agent-evaluation python -m app.evaluation --case D01,D02,D03 --repeat 5
 docker compose -f docker-compose.test.yml run --rm agent-evaluation python -m app.evaluation --repeat 1
+~~~
 
-# 人工核对通过报告后写入自动评分基线
-docker compose -f docker-compose.test.yml run --rm agent-evaluation python -m app.evaluation --write-baseline
-```
+Agent 评测集位于 backend/evaluation/agent/v1，当前包含 32 条场景。自动评分检查任务状态、证据覆盖、成果保存、工具路由、子 Agent 路由和禁用工具违规；数值结论与业务解释保留人工复核字段。
 
-Plan-and-Execute 评测集位于 `backend/evaluation/agent/v1/`：`cases.json` 保存场景、目标和确定性验收条件，`manifest.json` 定义质量门槛。自动评分检查任务状态、回答、证据、成果、禁用工具和子 Agent 路由；数值结论、证据解释和目标覆盖仍保留在报告的 `human_review` 中供人工复核。
+## 常用运维命令
 
-每次评测会清空并重新创建独立 PostgreSQL 测试库中的应用表和模拟经营表，输出到 `evaluation-reports/agent-<UTC时间>/`；不会使用或修改正在运行的应用数据。报告保存计划、工具观察、预算、答案、逐项自动评分和人工复核字段。
+~~~
+docker compose ps
+docker compose logs --tail 100 api
+docker compose logs --tail 100 worker
+docker compose up -d --build
+docker compose stop
+~~~
 
-## 运行约束
-
-- 每轮用户问题默认 30 次模型调用、20 次工具调用、5 次重规划、300 秒活跃执行时间，每步骤最多 6 次工具调用。
-- 用户补充新问题时开启新的交互轮次并重置该轮执行额度；累计调用、Token、成本和历史证据继续保留。暂停后恢复同一轮不会重置额度。
-- 补充条件产生约束版本，使旧结果无法冒充新条件下的证据。
-- 暂停/取消会阻止新动作及旧调用提交；已经开始的只读请求可能等待超时，但不会写入经营数据。
-- 当前每个 API 进程有一个后台执行器；多个实例通过数据库租约竞争任务。首版主要面向本地使用。
-- 前端“完成”不等于真实经营效果已经改善，也不等于通过完整模型质量评测。
+修改 .env 后执行 docker compose up -d 以重新创建受影响的服务。不要使用 docker compose down -v，除非明确需要删除本地数据卷。
