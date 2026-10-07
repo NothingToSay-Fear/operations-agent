@@ -28,6 +28,8 @@ type TaskWorkspaceProps = {
   onOpenArtifact: (id: string) => void;
   onOpenResource: (tab: 'memory' | 'task') => void;
   onOpenAudit: () => void;
+  answerPlayback: {taskId: string; previousAnswerId?: string} | null;
+  onAnswerPlaybackComplete: () => void;
 };
 
 export default function TaskWorkspace({
@@ -45,6 +47,8 @@ export default function TaskWorkspace({
   onOpenArtifact,
   onOpenResource,
   onOpenAudit,
+  answerPlayback,
+  onAnswerPlaybackComplete,
 }: TaskWorkspaceProps) {
   if (!task) {
     return <div className="task-layout"><section className="conversation"><div className="full-loading"><Spin /></div></section></div>;
@@ -53,6 +57,12 @@ export default function TaskWorkspace({
   const active = ['running', 'queued'].includes(task.status);
   const latestAssistant = conversation.at(-1)?.role === 'assistant' ? conversation.at(-1) : null;
   const earlierConversation = latestAssistant ? conversation.slice(0, -1) : conversation;
+  const animateLatestAnswer = Boolean(
+    latestAssistant
+    && latestAssistant.kind === 'answer'
+    && answerPlayback?.taskId === task.id
+    && latestAssistant.id !== answerPlayback.previousAnswerId,
+  );
 
   return (
     <div className="task-layout">
@@ -75,7 +85,15 @@ export default function TaskWorkspace({
           {pendingMemories > 0 && (
             <Alert type="info" message={`有 ${pendingMemories} 条长期记忆等待确认，尚未生效`} action={<Button onClick={() => onOpenResource('memory')}>检查候选</Button>} />
           )}
-          {latestAssistant && <ConversationMessage turn={latestAssistant} onEvidence={onOpenEvidence} onArtifact={onOpenArtifact} />}
+          {latestAssistant && (
+            <ConversationMessage
+              turn={latestAssistant}
+              onEvidence={onOpenEvidence}
+              onArtifact={onOpenArtifact}
+              animate={animateLatestAnswer}
+              onAnimationComplete={onAnswerPlaybackComplete}
+            />
+          )}
           {artifacts.length > 0 && <ArtifactList artifacts={artifacts} onOpenArtifact={onOpenArtifact} />}
         </div>
 

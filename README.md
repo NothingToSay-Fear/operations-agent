@@ -44,6 +44,16 @@ LLM_BASE_URL=你的兼容接口地址
 
 `LLM_BASE_URL` 为可选项；Ollama 使用 `LLM_PROVIDER=ollama`，设置本地模型名称，可不填密钥。模型必须支持工具调用和结构化输出。更改配置后重启后端。
 
+如需查询公开平台规则、行业信息或近期动态，可额外配置 Tavily；未配置时联网搜索工具不会提供给 Agent：
+
+```dotenv
+TAVILY_API_KEY=你的 Tavily API 密钥
+TAVILY_TIMEOUT_SECONDS=12
+TAVILY_SEARCH_DEPTH=basic
+```
+
+联网搜索仅返回标题、链接、摘要和发布日期，并作为独立 Evidence 保存。它不能替代经营数据库与资料中心中的业务事实。
+
 启动后端：
 
 ```powershell

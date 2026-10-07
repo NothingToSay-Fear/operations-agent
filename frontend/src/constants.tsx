@@ -26,6 +26,7 @@ export const TOOL_LABELS: Record<string, string> = {
   query_inventory: '检查库存与在途',
   query_marketing: '分析渠道与活动',
   search_knowledge: '检索运营资料',
+  search_web: '联网搜索公开资料',
   read_document: '阅读资料原文',
   calculate: '验证计算',
   save_artifact: '保存工作成果',

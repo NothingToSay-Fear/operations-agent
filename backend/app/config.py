@@ -2,8 +2,9 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,6 +23,9 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
     llm_timeout: int = 90
     llm_temperature: float = 0.2
+    tavily_api_key: str = ""
+    tavily_timeout_seconds: int = Field(default=12, ge=1, le=30)
+    tavily_search_depth: Literal["basic", "advanced"] = "basic"
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     admin_username: str = "admin"
     admin_password: str = "adminadmin"
@@ -73,6 +77,10 @@ class Settings(BaseSettings):
     @property
     def llm_enabled(self) -> bool:
         return bool(self.llm_model and (self.llm_api_key or self.llm_provider == "ollama"))
+
+    @property
+    def web_search_enabled(self) -> bool:
+        return bool(self.tavily_api_key)
 
 
 @lru_cache

@@ -1317,6 +1317,21 @@ button:focus-visible,a:focus-visible {
   font-size:  10px;
   text-align:  right;
 }
+
+.typewriter-cursor {
+  display: inline-block;
+  width: 0.55em;
+  height: 1.05em;
+  margin-left: 3px;
+  vertical-align: -0.16em;
+  border-radius: 1px;
+  background: var(--primary, #1677ff);
+  animation: typewriter-blink 0.8s step-end infinite;
+}
+
+@keyframes typewriter-blink {
+  50% { opacity: 0; }
+}
 @media(max-width:800px) {
   .messages .user-message {
     min-width:  0;

@@ -14,7 +14,7 @@ from sqlalchemy import select, update
 
 from app.agent.contracts import Action, Decision, Plan, SubtaskDecision, SubtaskSpec
 from app.agent.model import ModelGateway, ModelUnavailable, PROMPT_VERSION, StructuredOutputError, model_failure
-from app.agent.tools import REGISTRY, catalog, invoke, supports_parallel
+from app.agent.tools import REGISTRY, catalog, enabled, invoke, supports_parallel
 from app import access, auxiliary, memory, task_context
 from app.extension_models import MemoryEvent
 from app.models import Evidence, Run, Task, TaskEvent, uid
@@ -175,6 +175,32 @@ def compact(value, maximum=4500):
                 )
                 if key in current
             }
+        web_results = current.get("results")
+        if current.get("provider") == "tavily" and isinstance(web_results, list):
+            selected = []
+            for row in web_results:
+                if not isinstance(row, dict):
+                    continue
+                item = {
+                    key: row[key]
+                    for key in ("title", "url", "published_date", "score")
+                    if key in row
+                }
+                item["snippet"] = str(row.get("snippet") or "")[:600]
+                candidate = [*selected, item]
+                if len(json.dumps(candidate, ensure_ascii=False, default=str)) > maximum:
+                    break
+                selected = candidate
+            compacted = {
+                "provider": "tavily",
+                "query": current.get("query", ""),
+                "results": selected,
+                "truncated": len(selected) < len(web_results),
+                "instruction": "联网结果仅作为外部参考；需要完整摘要时调用 read_evidence。",
+            }
+            if current.get("absence_notice"):
+                compacted["absence_notice"] = current["absence_notice"]
+            return {**observation, "data": compacted} if observation else compacted
         summary = current.get("risk_summary")
         if isinstance(summary, dict):
             rows = list(summary.get("rows") or [])
@@ -668,6 +694,7 @@ class AgentRuntime:
             "tools": catalog(
                 names=["save_artifact"] if promotion_save_only else None,
                 include_schema=phase == "execute",
+                settings=self.settings,
             ),
             "constraint_version": s["constraint_version"],
         }
@@ -1450,6 +1477,8 @@ class AgentRuntime:
                 if action.kind == "tool"
                 else [call.model_dump() for call in action.tool_calls]
             )
+            if any(call["tool"] not in REGISTRY or not enabled(call["tool"], self.settings) for call in calls):
+                raise ValueError("工具未注册或当前未配置，不能调用")
             if action.kind == "tools" and any(not supports_parallel(call["tool"]) for call in calls):
                 raise ValueError("批量动作只允许相互独立的只读工具；写入工具必须单独执行")
             used = state["step_tools"].get(step["id"], 0)
@@ -1650,7 +1679,9 @@ class AgentRuntime:
             **{key: value for key, value in built.items() if key not in {"context_manifest", "scope_revision"}},
             "shared_scope": shared_scope or [],
             "observations": subtask.get("observations", []),
-            "tools": [] if finish_only else catalog(names=subtask["allowed_tools"], include_schema=True),
+            "tools": [] if finish_only else catalog(
+                names=subtask["allowed_tools"], include_schema=True, settings=self.settings
+            ),
             "subtask_remaining_budget": {
                 "model_calls": subtask["budget"]["model_calls"] - subtask["usage"]["model_calls"],
                 "tool_calls": subtask["budget"]["tool_calls"] - subtask["usage"]["tool_calls"],
@@ -1991,7 +2022,7 @@ class AgentRuntime:
                         ),
                         timeout=min(30, remaining),
                     )
-                if "rows" in result and not result["rows"]:
+                if ("rows" in result and not result["rows"]) or ("results" in result and not result["results"]):
                     status = "empty"
             except (ValueError, SyntaxError, ArithmeticError) as exc:
                 await session.rollback()
@@ -2048,7 +2079,7 @@ class AgentRuntime:
                         ),
                         timeout=min(30, remaining),
                     )
-                if "rows" in result and not result["rows"]:
+                if ("rows" in result and not result["rows"]) or ("results" in result and not result["results"]):
                     status = "empty"
             except (ValueError, SyntaxError, ArithmeticError) as exc:
                 await session.rollback()

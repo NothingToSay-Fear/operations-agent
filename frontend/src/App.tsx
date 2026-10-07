@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {Button, Drawer, Modal, Spin, message} from 'antd';
 import {MenuOutlined} from '@ant-design/icons';
 import {api, post, type Artifact, type ConversationTurn, type Task} from './api';
@@ -14,6 +14,11 @@ type User = {
   id: string;
   username: string;
   is_admin?: boolean;
+};
+
+type AnswerPlayback = {
+  taskId: string;
+  previousAnswerId?: string;
 };
 
 export default function App() {
@@ -39,6 +44,7 @@ export default function App() {
   const [audit, setAudit] = useState<any>(null);
   const [sourcePreview, setSourcePreview] = useState<any>(null);
   const [eventText, setEventText] = useState('');
+  const [answerPlayback, setAnswerPlayback] = useState<AnswerPlayback | null>(null);
   const [mobileMenu, setMobileMenu] = useState(false);
   const [toast, toastHolder] = message.useMessage();
   const selectedTaskRef = useRef(selectedTaskId);
@@ -48,6 +54,8 @@ export default function App() {
   const showError = (error: unknown) => {
     void toast.error((error as Error).message);
   };
+
+  const finishAnswerPlayback = useCallback(() => setAnswerPlayback(null), []);
 
   const loadTasks = async () => {
     setTasks(await api<Task[]>('/tasks'));
@@ -98,10 +106,15 @@ export default function App() {
     setBusy(true);
     try {
       if (selectedTaskId) {
+        setAnswerPlayback({
+          taskId: selectedTaskId,
+          previousAnswerId: [...conversation].reverse().find((turn) => turn.role === 'assistant')?.id,
+        });
         await post(`/tasks/${selectedTaskId}/control`, {action: 'message', message: goal});
         await refreshTask(selectedTaskId);
       } else {
         const created = await post<Task>('/tasks', {goal});
+        setAnswerPlayback({taskId: created.id});
         setSelectedTaskId(created.id);
       }
       setInput('');
@@ -116,6 +129,12 @@ export default function App() {
   const controlTask = async (action: string) => {
     if (!selectedTaskId) return;
     try {
+      if (action === 'resume') {
+        setAnswerPlayback({
+          taskId: selectedTaskId,
+          previousAnswerId: [...conversation].reverse().find((turn) => turn.role === 'assistant')?.id,
+        });
+      }
       await post(`/tasks/${selectedTaskId}/control`, {action});
       await refreshTask(selectedTaskId);
       await loadTasks();
@@ -209,6 +228,7 @@ export default function App() {
     setArtifacts([]);
     setConversation([]);
     setEventText('');
+    setAnswerPlayback((current) => current?.taskId === selectedTaskId ? current : null);
     if (selectedTaskId) void refreshTask(selectedTaskId).catch(showError);
   }, [selectedTaskId]);
 
@@ -294,6 +314,8 @@ export default function App() {
             onOpenArtifact={openArtifact}
             onOpenResource={openResources}
             onOpenAudit={() => selectedTaskId && api(`/tasks/${selectedTaskId}/audit`).then(setAudit).catch(showError)}
+            answerPlayback={answerPlayback}
+            onAnswerPlaybackComplete={finishAnswerPlayback}
           />
         ) : (
           <OverviewDashboard
