@@ -1,5 +1,5 @@
 import {useEffect, useRef, useState} from 'react';
-import {Button, Drawer, Modal, Spin, Tag, message} from 'antd';
+import {Button, Drawer, Modal, Spin, message} from 'antd';
 import {MenuOutlined} from '@ant-design/icons';
 import {api, post, type Artifact, type ConversationTurn, type Task} from './api';
 import {TOOL_LABELS} from './constants';
@@ -277,8 +277,6 @@ export default function App() {
       <main className="workspace">
         <header className="topbar">
           <Button className="mobile-nav-trigger" type="text" icon={<MenuOutlined />} aria-label="打开导航" onClick={() => setMobileMenu(true)} />
-          <span>工作空间 <span className="slash">/</span> {selectedTaskId ? '分析任务' : '运营总览'}</span>
-          <div><Tag className="simulation-tag">模拟数据</Tag><span className="readonly">◌ 业务只读</span></div>
         </header>
         {selectedTaskId ? (
           <TaskWorkspace

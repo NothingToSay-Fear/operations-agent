@@ -43,7 +43,7 @@ export default function LoginPage({onLogin}: LoginPageProps) {
             在商品、订单、库存与活动之间，找到值得采取的行动。
           </p>
         </div>
-        <div className="story-footer"><span className="status-dot" /> 模拟经营数据 · 只读分析与建议</div>
+        <div className="story-footer"><span className="status-dot" /> 经营数据 · 只读分析与建议</div>
       </section>
 
       <section className="login-form">

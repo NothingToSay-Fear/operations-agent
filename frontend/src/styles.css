@@ -80,19 +80,15 @@ button:focus-visible,a:focus-visible {
   min-height: 100vh;
 }
 .sidebar {
-  width: 244px;
+  width: 220px;
   position: fixed;
   inset: 0 auto 0 0;
   border-right: 1px solid var(--border);
   background: #121a16;
-  padding: 30px 20px 0;
+  padding: 22px 16px 0;
   display: flex;
   flex-direction: column;
   z-index: 10;
-}
-.sidebar .brand {
-  padding-left: 8px;
-  margin-bottom: 35px;
 }
 .new-task.ant-btn {
   height: 42px;
@@ -185,32 +181,8 @@ button:focus-visible,a:focus-visible {
   background: #df9b86;
 }
 .sidebar-bottom {
+  margin-top: auto;
   padding-top: 20px;
-}
-.environment {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  background: #1a241d;
-  border: 1px solid #b5e8990c;
-  border-radius: 8px;
-  padding: 14px 12px;
-  font-size: 11px;
-  color: #b9c5b5;
-}
-.environment small {
-  display: block;
-  color: #788771;
-  font-size: 10px;
-  margin-top: 5px;
-}
-.status-dot {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  background: var(--lime);
-  border-radius: 50%;
-  flex-shrink: 0;
 }
 .profile {
   display: flex;
@@ -236,39 +208,12 @@ button:focus-visible,a:focus-visible {
   font-size: 11px;
 }
 .workspace {
-  margin-left: 244px;
-  width: calc(100% - 244px);
+  margin-left: 220px;
+  width: calc(100% - 220px);
+  min-height: 100vh;
 }
 .topbar {
-  height: 73px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--border);
-  padding: 0 44px;
-  color: #9ca699;
-  font-size: 12px;
-}
-.slash {
-  color: #48564a;
-  margin: 0 12px;
-}
-.topbar>div {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.simulation-tag.ant-tag {
-  background: #b5e89909;
-  color: #a3b792;
-  border: 1px solid #b5e8991b;
-  border-radius: 5px;
-  font-size: 10px;
-  margin: 0;
-}
-.readonly {
-  font-size: 10px;
-  color: #7f8c7b;
+  display: none;
 }
 .overview {
   padding: 43px 44px 28px;
@@ -520,7 +465,7 @@ button:focus-visible,a:focus-visible {
 .task-layout {
   display: grid;
   grid-template-columns: minmax(0,1fr) 340px;
-  height: calc(100vh - 73px);
+  height: 100vh;
 }
 .conversation {
   display: flex;
@@ -636,8 +581,28 @@ button:focus-visible,a:focus-visible {
   padding: 10px 24px 0;
   border-left: 1px solid var(--border);
   background: #121c15;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
   position: relative;
+}
+.execution-panel .ant-tabs {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.execution-panel .ant-tabs-nav {
+  flex: 0 0 auto;
+}
+.execution-panel .ant-tabs-content-holder {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #34452e transparent;
 }
 .execution-panel .ant-tabs-tab {
   font-size: 12px;
@@ -727,7 +692,8 @@ button:focus-visible,a:focus-visible {
   line-height: 1.9;
 }
 .execution-footer {
-  margin-top: 30px;
+  flex: 0 0 auto;
+  margin-top: 16px;
   padding: 20px 0;
   border-top: 1px solid var(--border);
   font-size: 9px;
@@ -1086,11 +1052,7 @@ button:focus-visible,a:focus-visible {
     width: 70px;
     padding: 24px 10px 0;
   }
-  .sidebar .brand {
-    padding: 0;
-    justify-content: center;
-  }
-  .brand>span,.sidebar .new-task>span:not(.ant-btn-icon),.nav-item,.sidebar-label,.task-list,.environment,.profile>span,.profile>.ant-btn {
+  .brand>span,.sidebar .new-task>span:not(.ant-btn-icon),.nav-item,.sidebar-label,.task-list,.profile>span,.profile>.ant-btn {
     display: none;
   }
   .new-task.ant-btn {
@@ -1105,10 +1067,6 @@ button:focus-visible,a:focus-visible {
   .workspace {
     margin-left: 70px;
     width: calc(100% - 70px);
-  }
-  .topbar {
-    height: 60px;
-    padding: 0 20px;
   }
   .overview {
     padding: 28px 20px;
@@ -1130,12 +1088,12 @@ button:focus-visible,a:focus-visible {
   }
   .task-layout {
     height: auto;
-    min-height: calc(100vh - 60px);
+    min-height: calc(100vh - 52px);
     display: flex;
     flex-direction: column;
   }
   .conversation {
-    min-height: calc(100vh - 60px);
+    min-height: calc(100vh - 52px);
     padding: 0 20px;
   }
   .messages {
@@ -1145,6 +1103,11 @@ button:focus-visible,a:focus-visible {
     border-top: 1px solid var(--border);
     border-left: 0;
     padding: 15px 20px;
+    min-height: auto;
+    overflow: visible;
+  }
+  .execution-panel .ant-tabs-content-holder {
+    overflow: visible;
   }
   .section-heading>span {
     display: none;
@@ -1170,9 +1133,6 @@ button:focus-visible,a:focus-visible {
     max-width: 440px;
     padding: 35px;
   }
-  .readonly {
-    display: none;
-  }
   .composer-footer>span {
     font-size: 8px;
   }
@@ -1196,6 +1156,12 @@ button:focus-visible,a:focus-visible {
   display: none;
 }
 @media(max-width:800px) {
+  .topbar {
+    height: 52px;
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+  }
   .mobile-nav-trigger.ant-btn {
     display: inline-flex;
     margin-right: 7px;
@@ -1203,14 +1169,6 @@ button:focus-visible,a:focus-visible {
   .topbar {
     padding-left: 12px;
     padding-right: 12px;
-    gap: 0;
-  }
-  .topbar>span {
-    font-size: 10px;
-    margin-right: auto;
-  }
-  .topbar .slash {
-    margin: 0 7px;
   }
   .mobile-drawer .nav-item {
     display: flex;

@@ -122,7 +122,7 @@ export default function OverviewDashboard({
           <Button type="primary" shape="circle" icon={<ArrowUpOutlined />} aria-label="开始分析" loading={busy} disabled={!input.trim()} onClick={onSubmit} />
         </div>
       </div>
-      <p className="footnote">模拟数据用于分析验证。所有输出为建议，不会修改商品、库存或投放。</p>
+      <p className="footnote">所有输出为建议，不会修改商品、库存或投放。</p>
     </div>
   );
 }

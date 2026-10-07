@@ -212,9 +212,14 @@ METRICS = {
 async def capabilities(session):
     data = await session.get(Dataset, 1)
     if not data:
-        raise ValueError("尚未初始化模拟经营数据")
+        raise ValueError("尚未初始化经营数据")
+    visible_meta = {
+        key: value
+        for key, value in data.meta.items()
+        if key not in {"generator_version", "seed", "simulated", "scenario", "metric_version", "fingerprint", "ingestion"}
+    }
     return {
-        **data.meta,
+        **visible_meta,
         "dimensions": ["day", "channel", "product"],
         "channels": ["自然搜索", "付费搜索", "内容推荐", "直接访问", "联盟推广"],
         "sources": [
@@ -229,7 +234,6 @@ async def capabilities(session):
             "campaigns",
         ],
         "warnings": [
-            "全部数据为模拟数据",
             "存在迟到数据，统计受采集截止时间约束",
             "不提供未经验证的因果结论",
         ],
@@ -335,8 +339,6 @@ async def query_metrics(session, q: Query, *, all_groups=False):
         truncated=not all_groups and len(result) > q.limit,
         scope=q.model_dump(mode="json"),
         as_of=str(as_of),
-        simulated=True,
-        metric_version=meta["metric_version"],
         warnings=[
             "按采集截止时间过滤；近期数据可能未齐",
             "支付GMV不含运费，退款按到账日单独统计",
@@ -388,8 +390,6 @@ async def compare_metrics(session, q: PeriodComparison):
         "truncated": len(rows) > q.limit,
         "scope": q.model_dump(mode="json"),
         "as_of": current["as_of"],
-        "simulated": True,
-        "metric_version": current["metric_version"],
         "warnings": current["warnings"]
         + [
             "基于全量分组差额排序；未展示分组的合计差额见 other_delta",
@@ -422,7 +422,6 @@ async def get_products(session, q: ProductQuery):
         ],
         "has_more": len(rows) > q.limit,
         "offset": q.offset,
-        "simulated": True,
         "currency": "CNY",
     }
 
@@ -646,7 +645,6 @@ async def build_promotion_snapshot(session, q: PromotionSnapshotQuery):
         },
         "rows": all_rows,
         "truncated": len(all_rows) > q.limit,
-        "simulated": True,
         "currency": "CNY",
     }
 
@@ -754,7 +752,6 @@ async def query_inventory(session, q: InventoryQuery):
         truncated=len(result) > q.limit,
         as_of=str(as_of),
         demand_days=q.demand_days,
-        simulated=True,
         warnings=[
             "历史销量可能因缺货受到截断，不等同于真实需求",
             "在途仅显示当时已下单且未到货的信息，不使用未来实际到货日",
@@ -860,7 +857,6 @@ async def query_order_facts(session, q: Query):
         refund_breakdown=refunds,
         scope=q.model_dump(mode="json"),
         as_of=str(as_of),
-        simulated=True,
         warnings=[
             "订单样本不是全量，不能直接用样本计算总体指标",
             "退款按到账时间筛选，与订单创建时间窗口不同",
@@ -918,6 +914,5 @@ async def query_marketing(session, q: Query):
             for c in campaigns
         ],
         as_of=str(as_of),
-        simulated=True,
         warnings=["金额单位为分；不将订单收入伪装为平台归因收入", "缺少日记录不等于零花费"],
     )

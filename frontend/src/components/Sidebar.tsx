@@ -8,7 +8,6 @@ import {
   PlusOutlined,
 } from '@ant-design/icons';
 import type {Task} from '../api';
-import Brand from './Brand';
 
 type User = {username: string};
 
@@ -61,7 +60,6 @@ export function Sidebar({
 }: NavigationProps & {user: User; onLogout: () => void}) {
   return (
     <aside className="sidebar">
-      <Brand />
       <Button className="new-task" type="primary" icon={<PlusOutlined />} onClick={() => onSelectTask(null)}>发起新任务</Button>
       <button className={`nav-item ${!selectedTaskId ? 'active' : ''}`} onClick={() => onSelectTask(null)}><BarChartOutlined /> 运营总览</button>
       <button className="nav-item" onClick={() => onOpenResources('documents')}><BookOutlined /> 运营资料 <span className="nav-arrow">→</span></button>
@@ -69,7 +67,6 @@ export function Sidebar({
       <div className="sidebar-label">最近任务 <span>{tasks.length}</span></div>
       <TaskList tasks={tasks} selectedTaskId={selectedTaskId} onSelectTask={onSelectTask} onDeleteTask={onDeleteTask} />
       <div className="sidebar-bottom">
-        <div className="environment"><span className="status-dot" /><span>模拟经营环境<small>只读数据 · 自主分析</small></span></div>
         <div className="profile">
           <div className="avatar">{user.username.slice(0, 1).toUpperCase()}</div>
           <span>{user.username}</span>

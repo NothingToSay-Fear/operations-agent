@@ -7,6 +7,7 @@ from sqlalchemy import func, select, text
 from app.analytics import (
     InventoryQuery,
     Query,
+    capabilities,
     get_products,
     ProductQuery,
     query_inventory,
@@ -15,6 +16,14 @@ from app.analytics import (
 )
 from app.commerce_models import CommerceBase, Order, OrderLine, Visit
 from app.seed import SCENARIOS, generate, reconcile
+
+
+async def test_capabilities_hides_internal_generation_metadata(database):
+    async with database.read_sessions() as session:
+        result = await capabilities(session)
+
+    assert result["as_of"] == "2026-09-28"
+    assert not {"generator_version", "seed", "simulated", "scenario", "metric_version", "fingerprint", "ingestion"} & result.keys()
 
 
 @pytest.mark.parametrize("group_by", ["channel", "product"])

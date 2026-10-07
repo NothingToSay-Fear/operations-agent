@@ -132,7 +132,7 @@ def compact(value, maximum=4500):
             compact_summary = {**promotion_summary, "recommended_products": products}
             result = {
                 key: current[key]
-                for key in ("as_of", "planning_window", "campaign", "truncated", "simulated", "currency")
+                for key in ("as_of", "planning_window", "campaign", "truncated", "currency")
                 if key in current
             }
             while products and len(
@@ -732,7 +732,7 @@ class AgentRuntime:
         narrowed_criteria = [
             {
                 "id": "c1",
-                "description": "确认数据截止日期与两期等长的渠道 GMV 对比口径，并标明模拟数据限制。",
+                "description": "确认数据截止日期与两期等长的渠道 GMV 对比口径。",
             },
             {
                 "id": "c2",

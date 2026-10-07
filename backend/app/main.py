@@ -398,7 +398,6 @@ def create_app(settings=None, *, start_worker=True, model=None):
             "model_ready": settings.llm_enabled,
             "model": settings.llm_model or None,
             "provider": settings.llm_provider,
-            "simulated": True,
             "business_access": "read_only",
         }
 
@@ -420,7 +419,7 @@ def create_app(settings=None, *, start_worker=True, model=None):
                 )
             return {"dataset": meta, "current": current, "previous": previous, "trend": trend}
         except Exception:
-            raise HTTPException(503, "经营数据尚不可用，请先运行模拟数据初始化并检查只读连接。") from None
+            raise HTTPException(503, "经营数据尚不可用，请检查数据初始化状态与只读连接。") from None
 
     @app.post("/api/tasks", status_code=201)
     async def new_task(body: NewTask, user=Depends(current_user)):
